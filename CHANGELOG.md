@@ -8,6 +8,18 @@ Format:
 
 ---
 
+## Unreleased — MMS image viewing + cross-runtime image spawning
+
+- Added: inbound Sendblue MMS images are downloaded, MIME/size validated, uploaded to Convex storage, and passed as image blocks to the dispatcher. Direct image Q&A was validated on both Codex (`gpt-5.4-mini`) and Claude (`claude-opus-4-7`) with persisted `imageStorageIds` and no `mediaError`.
+- Added: current-turn image refs now propagate into spawned execution agents for both runtime paths. The dispatcher passes image refs through `spawn_agent`, execution-agent prompts include image blocks, and the shared runtime adapters convert them for Claude Agent SDK and Codex.
+- Changed: dispatcher instructions now state the general image routing contract: answer directly only from the message/image when possible; if external sources, current information, integrations, file/system access, or verification are needed, call `spawn_agent` and pass the relevant `imageRefs`.
+- Fixed: when `spawn_agent` is called during an image turn and the model omits or empties `imageRefs`, Boop now attaches all current-turn images by default. A non-empty `imageRefs` list can still narrow to a subset.
+- Fixed: explicit runtime switch commands such as "switch to Codex" now update the runtime setting directly instead of relying on the dispatcher to emit a self-tool call.
+- Fixed: dispatcher turns now fall back to text-only handling if stored image bytes cannot be retrieved, and stored image retrieval uses a streaming size cap before buffering bytes.
+- Fixed: image cleanup now checks memory anchors with bounded pagination, clears message image refs before deleting blobs, uses Convex cursors for expiry scans, and deduplicates blob deletes across repeated refs.
+- Added: image storage count in the Dashboard, image markers in Memory records, and cleanup for raw image bytes after configurable retention unless anchored by memory.
+- Test note: validated direct vision and image ref propagation across Claude Agent SDK and Codex, including live MMS turns and local `handleUserMessage` reproductions.
+
 ## Unreleased — Cross-runtime slash-command upgrade workflow
 
 - Changed: `/upgrade-boop` is the single documented upgrade path. The upstream reminder printed by `npm run dev` now points users to open Codex or Claude in the repo and run `/upgrade-boop`.

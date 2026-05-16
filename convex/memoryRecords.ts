@@ -27,6 +27,7 @@ export const upsert = mutation({
     supersedes: v.optional(v.array(v.string())),
     embedding: v.optional(v.array(v.float64())),
     metadata: v.optional(v.string()),
+    imageStorageIds: v.optional(v.union(v.array(v.id("_storage")), v.null())),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -62,13 +63,23 @@ export const upsert = mutation({
         supersedes: args.supersedes,
         embedding: args.embedding ?? existing.embedding,
         metadata: args.metadata ?? existing.metadata,
+        imageStorageIds:
+          args.imageStorageIds === null
+            ? undefined
+            : args.imageStorageIds && args.imageStorageIds.length > 0
+              ? args.imageStorageIds
+              : existing.imageStorageIds,
         lastAccessedAt: now,
       });
       return existing._id;
     }
 
+    const { imageStorageIds, ...rest } = args;
     return await ctx.db.insert("memoryRecords", {
-      ...args,
+      ...rest,
+      ...(imageStorageIds && imageStorageIds.length > 0
+        ? { imageStorageIds }
+        : {}),
       accessCount: 0,
       lastAccessedAt: now,
       lifecycle: "active",
@@ -273,6 +284,38 @@ export const countsByTier = query({
       pruned: all.filter((m) => m.lifecycle === "pruned").length,
       truncated: all.length === COUNTS_SCAN_LIMIT,
       scanLimit: COUNTS_SCAN_LIMIT,
+    };
+  },
+});
+
+export const findImageRefsPage = query({
+  args: {
+    storageIds: v.array(v.id("_storage")),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    pageSize: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    if (args.storageIds.length === 0) {
+      return { foundStorageIds: [], isDone: true, continueCursor: null };
+    }
+    const wanted = new Set(args.storageIds);
+    const result = await ctx.db
+      .query("memoryRecords")
+      .order("desc")
+      .paginate({
+        cursor: args.cursor ?? null,
+        numItems: args.pageSize ?? 50,
+      });
+    const found = new Set<string>();
+    for (const record of result.page) {
+      for (const storageId of record.imageStorageIds ?? []) {
+        if (wanted.has(storageId)) found.add(storageId);
+      }
+    }
+    return {
+      foundStorageIds: [...found],
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
     };
   },
 });
