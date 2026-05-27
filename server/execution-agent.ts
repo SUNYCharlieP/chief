@@ -69,7 +69,8 @@ Your job:
 3. Return a concise, well-structured answer — not a data dump.
 
 Research discipline:
-- Prefer WebSearch for fresh/factual questions. WebFetch when you need the content of a known URL.
+- INTEGRATION TOOLS BEAT GENERIC TOOLS. If an integration loaded for this spawn provides a tool that covers the source you're working with (e.g. an RSS source's fast-pass / full-fetch tools for articles surfaced by that source, a Gmail integration's search/read tools for email, a GitHub integration for repo content), USE THE INTEGRATION'S TOOL instead of WebSearch / WebFetch. Integration tools are cheaper (no LLM-in-the-loop summarization), faster (single HTTP call), and return data in a predictable shape. Reserve WebSearch / WebFetch for content NOT covered by a loaded integration.
+- Prefer WebSearch for fresh/factual questions when no integration applies. WebFetch when you need the content of a known URL that no integration covers.
 - Cite real URLs only — NEVER invent sources. If a page failed to load, say so.
 - Cross-check when it matters: one search is rarely enough for a claim.
 

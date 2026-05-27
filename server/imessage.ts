@@ -16,7 +16,18 @@ const POLL_INTERVAL_MS = Number(process.env.CHIEF_POLL_INTERVAL_MS ?? 5000);
 const CHIEF_CONTACT = process.env.CHIEF_CONTACT ?? "";
 
 const MAX_CHUNK = 2900;
-const ECHO_WINDOW_MS = 10_000;
+// Echo window has to outlast the slowest realistic turn between when Chief
+// pushes a send (e.g. send_ack at T+2s) and when the poll cycle that picks
+// up the receive row actually fires (poll is BLOCKED on the in-flight turn,
+// not on a clock). Research turns routinely run 100+ seconds; a per-turn
+// burst of 6+ web fetches has been observed at ~140s. 10 minutes is well
+// above the longest observed and short enough that stale state from a
+// dropped delivery doesn't poison future matches indefinitely.
+const ECHO_WINDOW_MS = 600_000;
+// FIFO cap on recentSends to bound memory if Messages ever silently drops
+// a delivery (no receive row arrives to consume the entry). 100 is well
+// above the most acks/replies one turn could ever produce.
+const MAX_RECENT_SENDS = 100;
 const SEND_TIMEOUT_MS = 15_000;
 const POLL_BATCH_LIMIT = 100;
 
@@ -181,6 +192,9 @@ export async function sendImessage(toNumber: string, text: string): Promise<void
     // Record BEFORE invoking osascript: the receive-side row can land in
     // chat.db within milliseconds, and the poller can run between the send
     // and the recording.
+    if (recentSends.length >= MAX_RECENT_SENDS) {
+      recentSends.shift();
+    }
     recentSends.push({ text: part, sentAt: Date.now() });
     try {
       await sendViaApplescript(chatGuid, part);

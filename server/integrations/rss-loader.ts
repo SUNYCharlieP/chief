@@ -242,7 +242,7 @@ export function createFeedTools(
     defineRuntimeTool(
       namespace,
       source.fullFetchTool,
-      `Full fetch: download an article URL from a ${source.fastPassTool} item and return its body as plain text (HTML stripped, truncated to ${FULL_BODY_MAX_CHARS} chars).`,
+      `For ANY article URL surfaced by ${source.fastPassTool}, USE THIS INSTEAD of WebFetch. ${source.displayName}-aware deterministic fetch: downloads the URL, strips HTML, truncates to ${FULL_BODY_MAX_CHARS} chars, returns plain text in a predictable JSON shape. WebFetch runs a model to summarize the page (extra LLM cost, variable output); ${source.fullFetchTool} is a single HTTP call with no model in the loop — cheaper, faster, consistent. Use WebFetch ONLY for follow-on URLs that did NOT come from ${source.fastPassTool}.`,
       {
         url: z
           .string()
