@@ -15,6 +15,7 @@ import {
 } from "./runtime-config.js";
 import { broadcast } from "./broadcast.js";
 import { sendImessage } from "./imessage.js";
+import { getBrainBlock } from "./brain.js";
 import { defineRuntimeTool } from "./runtimes/tool.js";
 import { runAgentRuntime } from "./runtimes/index.js";
 import { runtimeText } from "./runtimes/types.js";
@@ -320,10 +321,14 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
     .join("\n");
 
-  const systemPrompt = INTERACTION_SYSTEM.replace(
+  const base = INTERACTION_SYSTEM.replace(
     "{{INTEGRATIONS}}",
     integrations.join(", ") || "(no integrations configured yet)",
   );
+  // Append the 4 brain files at every turn so Chief's behavior reflects the
+  // current state of Charlie's canonical context, not a stale snapshot.
+  const brain = getBrainBlock();
+  const systemPrompt = brain ? `${base}\n\n${brain}` : base;
 
   const userText = opts.mediaError
     ? `[user sent images but they couldn't be downloaded: ${opts.mediaError}]\n${opts.content}`

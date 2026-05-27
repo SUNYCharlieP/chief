@@ -29,6 +29,7 @@
     "@hugeicons/react": "^1.0.0",
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "chokidar": "^5.0.0",
     "convex": "^1.36.1",
     "cors": "^2.8.5",
     "croner": "^9.0.0",

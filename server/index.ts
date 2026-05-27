@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { addClient } from "./broadcast.js";
 import { startImessagePoller, stopImessagePoller } from "./imessage.js";
+import { startBrainWatcher, stopBrainWatcher } from "./brain.js";
 import { handleUserMessage } from "./interaction-agent.js";
 import { loadIntegrations } from "./integrations/registry.js";
 import { startCleanupLoop } from "./memory/clean.js";
@@ -192,6 +193,10 @@ async function main() {
     console.log(`  websocket   WS   ws://localhost:${port}/ws`);
   });
 
+  startBrainWatcher().catch((err) =>
+    console.error("[brain] watcher failed to start", err),
+  );
+
   startImessagePoller().catch((err) =>
     console.error("[imessage] poller failed to start", err),
   );
@@ -203,6 +208,7 @@ async function main() {
       if (shuttingDown) return;
       shuttingDown = true;
       stopImessagePoller();
+      void stopBrainWatcher();
       closeLocalBrowser()
         .catch(() => undefined)
         .finally(() => process.exit(signalExitCodes[sig]));
