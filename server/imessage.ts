@@ -69,14 +69,18 @@ interface PolledRow {
   is_from_me: number | bigint;
   associated_message_type: number | bigint;
   service: string | null;
-  date: bigint;
 }
 
 async function pollNew(cid: number, sinceRowid: number): Promise<PolledRow[]> {
   const d = await openDb();
+  // NOTE: m.date is Apple's ns-since-2001 (e.g. 8.0e17) which overflows JS
+  // Number, so node:sqlite throws ERR_OUT_OF_RANGE on read. The poller
+  // doesn't need date — ROWID ordering is sufficient — so we just omit it.
+  // If we ever need the timestamp, switch the prepared statement to
+  // setReadBigInts(true) and surface as BigInt or ISO string.
   return d
     .prepare(
-      `SELECT m.ROWID, m.guid, m.text, m.is_from_me, m.associated_message_type, m.service, m.date
+      `SELECT m.ROWID, m.guid, m.text, m.is_from_me, m.associated_message_type, m.service
        FROM message m
        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
        WHERE cmj.chat_id = ? AND m.ROWID > ?
