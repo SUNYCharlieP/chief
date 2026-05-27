@@ -136,17 +136,23 @@ function chunk(text: string, size = MAX_CHUNK): string[] {
 
 function sendViaApplescript(guid: string, text: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const safeText = JSON.stringify(text);
-    const safeGuid = JSON.stringify(guid);
-    const script = `
-      var app = Application("Messages");
-      var chat = app.chats.byId(${safeGuid});
-      app.send(${safeText}, {to: chat});
-    `;
+    // JXA's app.chats.byId() and app.chats.whose() were both removed from
+    // Messages.app's scripting API in recent macOS releases. AppleScript
+    // classic's `chat id "..."` accessor still works. Pass the message
+    // body and chat guid via env vars so we don't have to escape quotes,
+    // backslashes, or newlines into the AppleScript source.
+    const script = [
+      'set msgText to system attribute "CHIEF_MSG_TEXT"',
+      'set chatGuid to system attribute "CHIEF_CHAT_GUID"',
+      'tell application "Messages" to send msgText to chat id chatGuid',
+    ].join("\n");
     execFile(
       "osascript",
-      ["-l", "JavaScript", "-e", script],
-      { timeout: SEND_TIMEOUT_MS },
+      ["-e", script],
+      {
+        timeout: SEND_TIMEOUT_MS,
+        env: { ...process.env, CHIEF_MSG_TEXT: text, CHIEF_CHAT_GUID: guid },
+      },
       (err, _stdout, stderr) => {
         if (err) {
           reject(new Error(`osascript: ${stderr?.trim() || err.message}`));
