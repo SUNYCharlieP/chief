@@ -45,8 +45,8 @@ export async function loadIntegrations(): Promise<void> {
   await registerComposioToolkits();
   const { registerBrowserIntegration } = await import("./browser-loader.js");
   registerBrowserIntegration();
-  const { registerHnRssIntegration } = await import("./hn-rss-loader.js");
-  registerHnRssIntegration();
+  const { registerRssIntegrations } = await import("./rss-loader.js");
+  registerRssIntegrations();
   const loaded = [...registry.keys()];
   const enabled = (await listEnabledIntegrations()).map((i) => i.name);
   console.log(
