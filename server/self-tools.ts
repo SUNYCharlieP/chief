@@ -73,7 +73,7 @@ export function createSelfTools(): RuntimeTool[] {
           composioEnabled: Boolean(process.env.COMPOSIO_API_KEY),
           embeddingsEnabled: true,
           embeddingsProvider: activeEmbeddingProvider(),
-          sendblueEnabled: Boolean(process.env.SENDBLUE_API_KEY),
+          imessageContact: process.env.CHIEF_CONTACT ?? null,
         };
         return runtimeText(JSON.stringify(config, null, 2));
       },

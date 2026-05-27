@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-// One command to run Boop locally: server + convex + debug dashboard + ngrok.
+// One command to run Chief locally: server + convex + debug dashboard.
+// Optionally launches ngrok if NGROK_DOMAIN or COMPOSIO_API_KEY is set
+// (used for Composio webhook delivery; the iMessage transport is local and
+// doesn't need a public URL).
 // Prefixes each child's output so you can tell who's saying what.
 
 import { spawn } from "node:child_process";
@@ -42,7 +45,9 @@ const ngrokDomain = envVars.NGROK_DOMAIN || "";
 const publicUrl = envVars.PUBLIC_URL || "";
 const hasStaticUrl =
   publicUrl && !publicUrl.includes("localhost") && !publicUrl.includes("127.0.0.1");
-const useNgrok = !hasStaticUrl || Boolean(ngrokDomain);
+// ngrok is only needed for Composio webhooks. The iMessage poller is local.
+const needsPublicUrl = Boolean(envVars.COMPOSIO_API_KEY);
+const useNgrok = needsPublicUrl && (!hasStaticUrl || Boolean(ngrokDomain));
 let convexEnvFile = null;
 
 function writeConvexDevEnvFile() {
@@ -161,33 +166,33 @@ async function waitForNgrokUrl(timeoutMs = 15000) {
 
 function showBanner(url, stable) {
   const line = "═".repeat(68);
-  const webhook = `${url}/sendblue/webhook`;
-  const from = envVars.SENDBLUE_FROM_NUMBER;
-  const fromLine = from
-    ? `  📱 Text this Sendblue number:  ${from}  (from a DIFFERENT phone)`
-    : `  ⚠ SENDBLUE_FROM_NUMBER is not set — outbound sends will fail.\n     Run: npm run sendblue:sync   (pulls it from the Sendblue CLI)`;
-
+  const contact = envVars.CHIEF_CONTACT || "<CHIEF_CONTACT not set>";
   const headline = stable
-    ? `your STABLE public URL is live.`
-    : `ngrok tunnel is live  (webhook auto-registered with Sendblue).`;
-  const footer = stable
-    ? ``
-    : `\n${C.dim}  ℹ The inbound webhook above was registered with Sendblue automatically.
-    Set SENDBLUE_AUTO_WEBHOOK=false in .env.local to disable, or pick a
-    stable URL (ngrok paid / Cloudflare Tunnel) via \`npm run setup\`.${C.reset}\n`;
-  const guide = stable
-    ? `\n  → First time? Sendblue dashboard → API Settings → Webhook\n    Configuration → add ${webhook} as INBOUND MESSAGE.\n`
-    : ``;
-
+    ? `stable public URL is live (Composio webhooks).`
+    : `ngrok tunnel is live (Composio webhooks).`;
   console.log(`
 ${C.banner}${line}
-  Boop is ready — ${headline}
+  Chief is ready — ${headline}
 
-  🐶 Debug dashboard (click me):   ${dashboardUrl}
-  🌐 Public URL:                   ${url}
-  📮 Sendblue webhook (inbound):   ${webhook}
-${fromLine}${guide}
-${line}${C.reset}${footer}`);
+  💬 iMessage poller:              ${contact}
+  📋 Debug dashboard:              ${dashboardUrl}
+  🌐 Public URL (Composio):        ${url}
+${line}${C.reset}`);
+}
+
+function showLocalOnlyBanner() {
+  const line = "═".repeat(68);
+  const contact = envVars.CHIEF_CONTACT || "<CHIEF_CONTACT not set>";
+  console.log(`
+${C.banner}${line}
+  Chief is running locally.
+
+  💬 iMessage poller:              ${contact}
+  📋 Debug dashboard:              ${dashboardUrl}
+
+  ${C.dim}No public tunnel — Composio webhooks (if used) won't fire.${C.reset}
+${line}${C.reset}
+`);
 }
 
 // --- main ---------------------------------------------------------------
@@ -201,13 +206,13 @@ ${C.dim}  Install:   brew install ngrok         (macOS)
              or download from https://ngrok.com/download
   Auth:      ngrok config add-authtoken <token>
              (free token at https://dashboard.ngrok.com)
-  Without ngrok you can still use the debug dashboard at http://localhost:5173
-  — iMessage replies via Sendblue won't work until your server is reachable.${C.reset}
+  Without ngrok you can still use the debug dashboard at http://localhost:5173.
+  Composio webhooks won't fire until ngrok or a stable PUBLIC_URL is set.${C.reset}
 `);
   }
 }
 
-console.log(`\nBoop dev starting on port ${port}. Ctrl-C to stop everything.\n`);
+console.log(`\nChief dev starting on port ${port}. Ctrl-C to stop everything.\n`);
 
 // Background "new-version available?" check. Runs concurrently with the
 // child services; output is prefixed with `upstream │ ` by run() so it
@@ -251,27 +256,6 @@ if (useNgrok && ngrokInstalled) {
 
 // Wait for all the core services to be ready before printing the banner,
 // so the URL isn't dangled in front of the user while Convex is still booting.
-async function autoRegisterWebhook(publicUrl) {
-  if (envVars.SENDBLUE_AUTO_WEBHOOK === "false") return;
-  const webhookUrl = `${publicUrl}/sendblue/webhook`;
-  const prefix = `${C.ngrok}webhook${C.reset} │ `;
-  const child = spawn("node", ["scripts/sendblue-webhook.mjs", webhookUrl], {
-    cwd: root,
-    env: { ...process.env },
-  });
-  child.stdout.on("data", (d) => {
-    for (const line of d.toString().split("\n")) {
-      if (line.trim()) process.stdout.write(prefix + line + "\n");
-    }
-  });
-  child.stderr.on("data", (d) => {
-    for (const line of d.toString().split("\n")) {
-      if (line.trim()) process.stdout.write(prefix + line + "\n");
-    }
-  });
-  await new Promise((r) => child.on("exit", r));
-}
-
 async function autoRegisterComposioWebhook(publicUrl) {
   if (envVars.COMPOSIO_AUTO_WEBHOOK === "false") return;
   if (!envVars.COMPOSIO_API_KEY) return;
@@ -302,13 +286,8 @@ Promise.all([
   .then(async ([, , , ngrokUrl]) => {
     if (useNgrok && ngrokInstalled) {
       if (ngrokUrl) {
-        // Only auto-register for ephemeral ngrok URLs. Reserved domains and
-        // static URLs are already fixed in the Sendblue dashboard.
-        if (!ngrokDomain) {
-          await autoRegisterWebhook(ngrokUrl);
-        }
         // Composio webhook subscription is fully programmatic (PATCHable),
-        // so we can refresh it on every restart regardless of whether the
+        // so we refresh it on every restart regardless of whether the
         // domain is reserved.
         await autoRegisterComposioWebhook(ngrokUrl);
         showBanner(ngrokUrl, Boolean(ngrokDomain));
@@ -320,17 +299,7 @@ Promise.all([
     } else if (hasStaticUrl) {
       showBanner(publicUrl, true);
     } else {
-      const line = "═".repeat(68);
-      console.log(`
-${C.banner}${line}
-  Boop is running locally.
-
-  🐶 Debug dashboard:   ${dashboardUrl}
-
-  ⚠ No public tunnel configured. iMessage won't work until you expose
-    the server. Use the Chat tab in the dashboard to test for now.
-${line}${C.reset}
-`);
+      showLocalOnlyBanner();
     }
   })
   .catch(() => {});
