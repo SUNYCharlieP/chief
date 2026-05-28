@@ -8,6 +8,14 @@ import {
 import type { RuntimeRunRequest, RuntimeRunResult, RuntimeTool } from "./types.js";
 import { aggregateUsageFromResult, EMPTY_USAGE } from "../usage.js";
 
+// Enabling extended thinking on the conversational dispatcher routes the model's
+// reasoning into `thinking` blocks, which this runtime intentionally does not
+// capture into `text` (see the assistant-message loop below). Without it the
+// model's planning prose lands in `text` blocks and gets sent verbatim as the
+// iMessage reply. Scoped to dispatcher only so scan (background) and execution
+// runs are untouched. ~3k tokens is enough to think before a short reply.
+const DISPATCHER_THINKING_TOKENS = 3000;
+
 type ClaudePrompt =
   | string
   | AsyncIterable<{
@@ -83,6 +91,9 @@ export async function runClaudeAgent(request: RuntimeRunRequest): Promise<Runtim
       allowedTools: request.allowedTools,
       disallowedTools: request.disallowedTools,
       ...(request.mode === "execution" ? { settingSources: ["project"] as const } : {}),
+      ...(request.mode === "dispatcher"
+        ? { maxThinkingTokens: DISPATCHER_THINKING_TOKENS }
+        : {}),
       permissionMode: "bypassPermissions",
       abortController: request.abortController,
     },
