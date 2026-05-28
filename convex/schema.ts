@@ -107,6 +107,8 @@ export default defineSchema({
       v.literal("consolidation-adversary"),
       v.literal("consolidation-judge"),
       v.literal("proactive"),
+      v.literal("morning-scan-scoring"),
+      v.literal("morning-scan-format"),
     ),
     conversationId: v.optional(v.string()),
     turnId: v.optional(v.string()),
@@ -246,4 +248,72 @@ export default defineSchema({
   })
     .index("by_automation", ["automationId"])
     .index("by_run_id", ["runId"]),
+
+  // Phase 8: morning-scan candidate pool (per-item scoring against the brain).
+  scanCandidates: defineTable({
+    candidateId: v.string(),
+    scanRunId: v.string(),
+    source: v.string(),
+    title: v.string(),
+    url: v.string(),
+    pubDate: v.optional(v.string()),
+    excerpt: v.optional(v.string()),
+    score: v.number(),
+    scoreReasons: v.array(v.string()),
+    competesWith: v.optional(v.array(v.string())),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("nominated"),
+      v.literal("surfaced"),
+      v.literal("dropped"),
+      v.literal("competes"),
+    ),
+    scannedAt: v.number(),
+    surfacedAt: v.optional(v.number()),
+  })
+    .index("by_candidate_id", ["candidateId"])
+    .index("by_scan_run", ["scanRunId"])
+    .index("by_status", ["status"])
+    .index("by_score", ["score"]),
+
+  // Phase 8: per-day per-source cost tracking for budget enforcement.
+  dailyScanCost: defineTable({
+    date: v.string(), // YYYY-MM-DD in the user's local timezone
+    source: v.string(),
+    totalUsd: v.number(),
+    scansAttempted: v.number(),
+    scansSucceeded: v.number(),
+    hitBudgetCap: v.boolean(),
+    updatedAt: v.number(),
+  })
+    .index("by_date_source", ["date", "source"])
+    .index("by_date", ["date"]),
+
+  // Phase 8: audit log of every scan + surface run. `formattedCheckIn` on the
+  // scan record is the pre-rendered Socratic check-in body that the 7am
+  // surface job retrieves and sends. Empty (or missing) when nothing crossed
+  // the signal threshold.
+  scanRuns: defineTable({
+    runId: v.string(),
+    kind: v.union(v.literal("scan"), v.literal("surface")),
+    status: v.union(
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+    ),
+    sources: v.optional(v.array(v.string())),
+    itemsScanned: v.optional(v.number()),
+    itemsScored: v.optional(v.number()),
+    itemsNominated: v.optional(v.number()),
+    totalCostUsd: v.optional(v.number()),
+    elapsedMs: v.optional(v.number()),
+    error: v.optional(v.string()),
+    formattedCheckIn: v.optional(v.string()),
+    surfaceLog: v.optional(v.string()),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_run_id", ["runId"])
+    .index("by_kind_status", ["kind", "status"])
+    .index("by_started_at", ["startedAt"]),
 });

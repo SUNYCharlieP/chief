@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import { addClient } from "./broadcast.js";
 import { startImessagePoller, stopImessagePoller } from "./imessage.js";
 import { startBrainWatcher, stopBrainWatcher } from "./brain.js";
+import { startMorningScan, stopMorningScan, runMorningScan, runMorningSurface } from "./morning-scan.js";
 import { handleUserMessage } from "./interaction-agent.js";
 import { loadIntegrations } from "./integrations/registry.js";
 import { startCleanupLoop } from "./memory/clean.js";
@@ -157,6 +158,26 @@ async function main() {
     res.json(result);
   });
 
+  // Debug: trigger an immediate morning scan, bypassing the 5am cron.
+  app.post("/scan/run", async (_req, res) => {
+    try {
+      const report = await runMorningScan();
+      res.json(report);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Debug: trigger an immediate morning surface, bypassing the 7am cron.
+  app.post("/scan/surface", async (_req, res) => {
+    try {
+      const report = await runMorningSurface();
+      res.json(report);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // Chat endpoint for local testing and the debug dashboard
   app.post("/chat", async (req, res) => {
     const { conversationId, content } = req.body ?? {};
@@ -201,6 +222,10 @@ async function main() {
     console.error("[imessage] poller failed to start", err),
   );
 
+  startMorningScan().catch((err) =>
+    console.error("[morning-scan] scheduler failed to start", err),
+  );
+
   const signalExitCodes = { SIGTERM: 143, SIGINT: 130, SIGHUP: 129 } as const;
   let shuttingDown = false;
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
@@ -208,6 +233,7 @@ async function main() {
       if (shuttingDown) return;
       shuttingDown = true;
       stopImessagePoller();
+      stopMorningScan();
       void stopBrainWatcher();
       closeLocalBrowser()
         .catch(() => undefined)
