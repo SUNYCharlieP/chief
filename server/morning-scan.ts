@@ -31,7 +31,7 @@ import { EMPTY_USAGE, type UsageTotals } from "./usage.js";
 // per-source cap effectively impossible at current source counts — we keep
 // the tracking machinery so future expensive sources can be capped.
 
-const SIGNAL_THRESHOLD = Number(process.env.CHIEF_SIGNAL_THRESHOLD ?? 75);
+const SIGNAL_THRESHOLD = Number(process.env.CHIEF_SIGNAL_THRESHOLD ?? 70);
 const DAILY_SCAN_BUDGET_USD = Number(process.env.CHIEF_DAILY_SCAN_BUDGET_USD ?? 2.0);
 const PER_SOURCE_DAILY_BUDGET_USD = Number(
   process.env.CHIEF_PER_SOURCE_DAILY_BUDGET_USD ?? 0.5,
@@ -167,6 +167,7 @@ interface ScoredCandidate {
   score: number;
   reasons: string[];
   competesWith: string[];
+  decision: "nominated" | "dropped" | "competes";
 }
 
 const SCORING_SYSTEM = `You score candidate items against Charlie's CANONICAL BRAIN for a morning surface check-in. Return STRICT JSON only, no prose, no preamble.`;
@@ -288,6 +289,10 @@ export async function runMorningScan(): Promise<ScanReport> {
     errors: [],
   };
 
+  // Declared at function scope so the catch block and all audit-log call
+  // sites can render whatever was scored before a failure.
+  const candidates: ScoredCandidate[] = [];
+
   try {
     await loadBrain();
     const brain = getBrainBlock();
@@ -299,7 +304,7 @@ export async function runMorningScan(): Promise<ScanReport> {
         error: "brain empty at scan time",
         elapsedMs: Date.now() - started,
       });
-      await appendAuditLog(buildAuditEntry(report, "scan"));
+      await appendAuditLog(buildAuditEntry(report, candidates));
       return report;
     }
     const keywords = extractBrainKeywords(brain);
@@ -359,7 +364,7 @@ export async function runMorningScan(): Promise<ScanReport> {
         elapsedMs: report.elapsedMs,
         formattedCheckIn: "",
       });
-      await appendAuditLog(buildAuditEntry(report, "scan"));
+      await appendAuditLog(buildAuditEntry(report, candidates));
       return report;
     }
 
@@ -385,10 +390,17 @@ export async function runMorningScan(): Promise<ScanReport> {
       report.errors.push("scoring LLM returned no parseable items");
     }
 
-    const candidates: ScoredCandidate[] = [];
     for (const s of scored) {
       const item = shortlist[s.index];
       if (!item) continue;
+      const competesWith = Array.isArray(s.competesWith) ? s.competesWith : [];
+      const score = Number(s.score) || 0;
+      const decision: ScoredCandidate["decision"] =
+        competesWith.length > 0
+          ? "competes"
+          : score >= SIGNAL_THRESHOLD
+            ? "nominated"
+            : "dropped";
       const cand: ScoredCandidate = {
         candidateId: randomId("cand"),
         source: item.source,
@@ -396,17 +408,12 @@ export async function runMorningScan(): Promise<ScanReport> {
         url: item.url,
         pubDate: item.pubDate ?? null,
         excerpt: item.excerpt ?? null,
-        score: Number(s.score) || 0,
+        score,
         reasons: Array.isArray(s.reasons) ? s.reasons.slice(0, 5) : [],
-        competesWith: Array.isArray(s.competesWith) ? s.competesWith : [],
+        competesWith,
+        decision,
       };
       candidates.push(cand);
-      const status =
-        cand.competesWith.length > 0
-          ? "competes"
-          : cand.score >= SIGNAL_THRESHOLD
-            ? "nominated"
-            : "dropped";
       await convex.mutation(api.scanCandidates.create, {
         candidateId: cand.candidateId,
         scanRunId: runId,
@@ -418,7 +425,7 @@ export async function runMorningScan(): Promise<ScanReport> {
         score: cand.score,
         scoreReasons: cand.reasons,
         competesWith: cand.competesWith,
-        status,
+        status: decision,
       });
     }
 
@@ -462,7 +469,7 @@ export async function runMorningScan(): Promise<ScanReport> {
       elapsedMs: report.elapsedMs,
       formattedCheckIn: report.formattedCheckIn ?? "",
     });
-    await appendAuditLog(buildAuditEntry(report, "scan"));
+    await appendAuditLog(buildAuditEntry(report, candidates));
     return report;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -475,7 +482,7 @@ export async function runMorningScan(): Promise<ScanReport> {
       elapsedMs: report.elapsedMs,
       itemsScanned: report.itemsScanned,
     });
-    await appendAuditLog(buildAuditEntry(report, "scan"));
+    await appendAuditLog(buildAuditEntry(report, candidates));
     return report;
   }
 }
@@ -561,10 +568,10 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
   return { runId, sentTo: contact, bodyChars: body.length, source, elapsedMs: elapsed };
 }
 
-function buildAuditEntry(report: ScanReport, kind: "scan"): string {
+function buildAuditEntry(report: ScanReport, candidates: ScoredCandidate[]): string {
   const ts = new Date().toISOString();
   const lines = [
-    `## ${kind.toUpperCase()} ${report.runId} @ ${ts}`,
+    `## SCAN ${report.runId} @ ${ts}`,
     `- date: ${report.date}`,
     `- sources: ${report.sourcesTouched.join(", ") || "(none)"}`,
     `- itemsScanned: ${report.itemsScanned}`,
@@ -579,6 +586,18 @@ function buildAuditEntry(report: ScanReport, kind: "scan"): string {
   if (report.errors.length > 0) {
     lines.push(`- errors:`);
     for (const e of report.errors) lines.push(`  - ${e}`);
+  }
+  if (candidates.length > 0) {
+    const sorted = [...candidates].sort((a, b) => b.score - a.score);
+    lines.push(`- scored items (${sorted.length}, sorted by score desc):`);
+    for (const c of sorted) {
+      lines.push(`  - [${c.score}] ${c.decision} | ${JSON.stringify(c.title)} | ${c.source}`);
+      lines.push(`    url: ${c.url}`);
+      if (c.reasons.length > 0) lines.push(`    reasons: ${JSON.stringify(c.reasons)}`);
+      if (c.competesWith.length > 0) {
+        lines.push(`    competesWith: ${JSON.stringify(c.competesWith)}`);
+      }
+    }
   }
   if (report.formattedCheckIn) {
     lines.push("- formattedCheckIn:");
