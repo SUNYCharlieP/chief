@@ -137,11 +137,11 @@ Claude canonical: ${[...KNOWN_MODELS].map((k) => `"${k}"`).join(", ")}
 Codex aliases: ${Object.keys(CODEX_MODEL_ALIASES).map((k) => `"${k}"`).join(", ")}
 Codex canonical: ${[...KNOWN_CODEX_MODELS].map((k) => `"${k}"`).join(", ")}
 
-Use when the user says "use opus", "switch to sonnet", "use Codex mini", "make it faster", etc.`,
+Use when the user says "switch to sonnet", "use Codex mini", "make it faster", etc. Opus is not selectable: Sonnet 4.6 is the locked floor for the Claude runtime.`,
       {
         model: z
           .string()
-          .describe('Model to use. Canonical ID like "claude-opus-4-7" or "gpt-5.4-mini", or an alias.'),
+          .describe('Model to use. Canonical ID like "claude-sonnet-4-6" or "gpt-5.4-mini", or an alias.'),
       },
       async ({ model }) => {
         const runtime = (await getRuntimeConfig()).runtime;

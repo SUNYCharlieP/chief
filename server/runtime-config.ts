@@ -64,9 +64,12 @@ export const RUNTIME_ALIASES: Record<string, RuntimeName> = {
 };
 
 // Backward-compatible names kept for existing imports and prompt text.
+// Opus is intentionally excluded: Sonnet 4.6 is the locked floor for the
+// Claude runtime. Dropping the opus aliases/canonical id means set_model
+// rejects any attempt to escalate to Opus, and a stale stored "model"
+// setting of claude-opus-4-7 is treated as unknown and falls back to the
+// Sonnet env default. Re-add both entries here to re-enable Opus.
 export const MODEL_ALIASES: Record<string, string> = {
-  opus: "claude-opus-4-7",
-  "opus 4.7": "claude-opus-4-7",
   sonnet: "claude-sonnet-4-6",
   "sonnet 4.6": "claude-sonnet-4-6",
   haiku: "claude-haiku-4-5-20251001",
@@ -74,7 +77,6 @@ export const MODEL_ALIASES: Record<string, string> = {
 };
 
 export const KNOWN_MODELS = new Set<string>([
-  "claude-opus-4-7",
   "claude-sonnet-4-6",
   "claude-haiku-4-5-20251001",
 ]);
