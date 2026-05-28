@@ -341,4 +341,31 @@ export default defineSchema({
     .index("by_run_id", ["runId"])
     .index("by_kind_status", ["kind", "status"])
     .index("by_started_at", ["startedAt"]),
+
+  // Stage A draft-and-ask action layer. A local-write action Chief has
+  // drafted and shown over iMessage, awaiting the user's explicit in-thread
+  // confirm. `pitch` is the benefit case the user saw; `entry` is the exact
+  // bytes appended to Skills.md on confirm (held in limbo so the commit never
+  // re-drafts). Only one action is active per conversation at a time.
+  pendingActions: defineTable({
+    actionId: v.string(),
+    conversationId: v.string(),
+    kind: v.literal("skills.append"),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("committed"),
+      v.literal("rejected"),
+      v.literal("expired"),
+    ),
+    pitch: v.string(),
+    entry: v.string(),
+    targetFile: v.string(),
+    sha256: v.string(),
+    shownAt: v.optional(v.number()),
+    decidedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_action_id", ["actionId"])
+    .index("by_conversation_status", ["conversationId", "status"]),
 });

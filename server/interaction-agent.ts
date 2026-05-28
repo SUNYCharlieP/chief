@@ -8,6 +8,7 @@ import { listEnabledIntegrations } from "./integrations/registry.js";
 import { createAutomationTools } from "./automation-tools.js";
 import { createDraftDecisionTools } from "./draft-tools.js";
 import { createSelfTools } from "./self-tools.js";
+import { createSkillTools, handlePendingActionReply } from "./skill-actions.js";
 import {
   getRuntimeConfig,
   resolveRuntimeInput,
@@ -98,6 +99,17 @@ Your only tools:
 - list_drafts / send_draft / reject_draft
 - get_config / set_runtime / set_model / set_codex_reasoning_effort / set_timezone / list_integrations / search_composio_catalog / inspect_toolkit (self-inspection)
 - send_ack (short typing-indicator message before spawn_agent)
+- stage_skill_draft (draft a Skills.md candidate for Charlie to approve; see "Saving a skill")
+
+# Saving a skill (draft-and-ask)
+
+When Charlie pastes or describes a workflow/technique and asks to turn it into a skill ("make a skill out of this"), use stage_skill_draft. It takes two things:
+- pitch: a few iMessage-native lines whose only job is to make Charlie see why this helps HIM. The technique in one line; the SPECIFIC friction in his current stack or habits it removes (ground it in Context.md / Memory.md, name the real project, do not list generic benefits); what concretely changes if he adopts it. Never paste the full entry into the pitch.
+- entry: the full structured Skills.md entry, matching the file's existing format.
+
+Only stage if you can make a specific, honest benefit case. If you can't, do NOT stage: tell him in one line it's not worth a skill and why. Never pad a weak case to justify a draft.
+
+After staging, send the pitch as your reply and end with the exact show-line the tool returns. Never say you saved the skill. The write happens only when Charlie confirms, and the system performs the write and the confirmation, not you.
 
 # Hard rules
 
@@ -286,6 +298,28 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     content: opts.content,
   });
 
+  // Draft-and-ask consent gate (deterministic, pre-LLM). If a skill draft is
+  // pending in this conversation, "show" reveals it and an allowlisted
+  // affirmative commits the local write; both short-circuit the LLM. Anything
+  // else discards the draft and falls through to normal handling. Consent is
+  // never delegated to the model.
+  if (opts.kind !== "proactive") {
+    const gate = await handlePendingActionReply(opts.conversationId, opts.content);
+    if (gate.handled && typeof gate.reply === "string") {
+      const reply = gate.reply;
+      broadcast("assistant_message", { conversationId: opts.conversationId, content: reply });
+      if (opts.persistAssistantReply) {
+        await convex.mutation(api.messages.send, {
+          conversationId: opts.conversationId,
+          role: "assistant",
+          content: reply,
+          turnId,
+        });
+      }
+      return reply;
+    }
+  }
+
   const history =
     opts.kind === "proactive"
       ? []
@@ -406,6 +440,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     ...createAutomationTools(opts.conversationId),
     ...createDraftDecisionTools(opts.conversationId, runtimeConfig),
     ...createSelfTools(),
+    ...createSkillTools(opts.conversationId),
     defineRuntimeTool(
       "boop-ack",
       "send_ack",
@@ -504,6 +539,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
               "mcp__boop-self__list_integrations",
               "mcp__boop-self__search_composio_catalog",
               "mcp__boop-self__inspect_toolkit",
+              "mcp__boop-skills__stage_skill_draft",
             ],
       // Belt-and-suspenders: even with bypassPermissions the SDK can leak
       // its built-ins if we only whitelist. Explicitly block them on the
