@@ -16,6 +16,7 @@ import {
 import { broadcast } from "./broadcast.js";
 import { sendImessage } from "./imessage.js";
 import { getBrainBlock } from "./brain.js";
+import { createObservationTools } from "./observation-tools.js";
 import { defineRuntimeTool } from "./runtimes/tool.js";
 import { runAgentRuntime } from "./runtimes/index.js";
 import { runtimeText } from "./runtimes/types.js";
@@ -90,6 +91,7 @@ Memory.md spells this out. Restating the load-bearing rules because model defaul
 
 Your only tools:
 - recall / write_memory (durable memory for this user)
+- recall_activity (observed git activity + competes-flags; use for "what have I been working on / spending time on" and to ground proposals in what he's actually been doing)
 - spawn_agent (dispatches a sub-agent that CAN touch the world)
 - create_automation / list_automations / toggle_automation / delete_automation
 - list_drafts / send_draft / reject_draft
@@ -399,6 +401,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
 
   const tools = [
     ...createMemoryTools(opts.conversationId),
+    ...createObservationTools(),
     ...createAutomationTools(opts.conversationId),
     ...createDraftDecisionTools(opts.conversationId, runtimeConfig),
     ...createSelfTools(),

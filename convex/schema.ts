@@ -289,6 +289,31 @@ export default defineSchema({
     .index("by_date_source", ["date", "source"])
     .index("by_date", ["date"]),
 
+  // Phase 9: observation log. Activity Chief observes about Charlie (git
+  // commits, competes-flags from the morning scan, later: self-report
+  // answers). Distinct from memoryRecords so raw activity doesn't pollute
+  // recall(); the recall_activity tool reads this table directly.
+  observations: defineTable({
+    observationId: v.string(),
+    kind: v.union(
+      v.literal("git-commit"),
+      v.literal("competes-flag"),
+      v.literal("self-report"),
+    ),
+    source: v.string(), // repo name, "morning-scan", etc.
+    summary: v.string(),
+    detail: v.optional(v.string()),
+    observedAt: v.number(), // when the activity happened (commit date, etc.)
+    recordedAt: v.number(), // when Chief recorded it
+    // Idempotency key so a re-running observer doesn't double-record. e.g.
+    // "git:Arca:<sha>" or "competes:<candidateId>".
+    dedupKey: v.string(),
+  })
+    .index("by_observation_id", ["observationId"])
+    .index("by_kind", ["kind"])
+    .index("by_dedup_key", ["dedupKey"])
+    .index("by_observed_at", ["observedAt"]),
+
   // Phase 8: audit log of every scan + surface run. `formattedCheckIn` on the
   // scan record is the pre-rendered Socratic check-in body that the 7am
   // surface job retrieves and sends. Empty (or missing) when nothing crossed

@@ -427,6 +427,26 @@ export async function runMorningScan(): Promise<ScanReport> {
         competesWith: cand.competesWith,
         status: decision,
       });
+      // Competes items don't surface in the morning check-in; they flow into
+      // the observation log so the weekly self-report can review what Chief
+      // flagged as tempting-but-conflicting. Dedup by date+url so the same
+      // item on the same day records once.
+      if (decision === "competes") {
+        await convex.mutation(api.observations.recordIfNew, {
+          observationId: `obs_competes_${cand.candidateId}`,
+          kind: "competes-flag",
+          source: "morning-scan",
+          summary: `[competes: ${cand.competesWith.join(", ")}] ${cand.title}`,
+          detail: JSON.stringify({
+            url: cand.url,
+            score: cand.score,
+            reasons: cand.reasons,
+            competesWith: cand.competesWith,
+          }),
+          observedAt: Date.now(),
+          dedupKey: `competes:${date}:${cand.url}`,
+        });
+      }
     }
 
     const nominated = candidates
