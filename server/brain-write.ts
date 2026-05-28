@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { stripEmDashes } from "./text-style.js";
 
 // Stage A local-write executor. Chief (running as user "Chief") cannot write
 // the brain files (owned by charlie), so the only thing this does is drop an
@@ -34,7 +35,12 @@ export interface AppendResult {
   requestId: string;
 }
 
-export async function appendSkillEntry(entry: string): Promise<AppendResult> {
+export async function appendSkillEntry(rawEntry: string): Promise<AppendResult> {
+  // Last step before the bytes leave for the spool: strip em/en dashes so the
+  // written Skills.md obeys the no-em-dash rule regardless of what the model
+  // drafted. Everything downstream (bytes, hash, payload, mirror poll) uses the
+  // cleaned entry.
+  const entry = stripEmDashes(rawEntry);
   const requestId = randomId("bw");
   const bytes = Buffer.byteLength(entry, "utf8");
   await mkdir(SPOOL_DIR, { recursive: true });

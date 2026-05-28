@@ -4,6 +4,7 @@ import { api } from "../convex/_generated/api.js";
 import { convex } from "./convex-client.js";
 import { handleUserMessage } from "./interaction-agent.js";
 import { broadcast } from "./broadcast.js";
+import { stripEmDashes } from "./text-style.js";
 
 // node:sqlite is dynamic-imported inside openDb() so vitest doesn't trip on
 // it when tests transitively pull this module via interaction-agent imports.
@@ -187,7 +188,11 @@ export async function sendImessage(toNumber: string, text: string): Promise<void
     chatId = resolved.rowid;
     chatGuid = resolved.guid;
   }
-  const plain = stripMarkdown(text);
+  // Last transform before send: strip em/en dashes deterministically so the
+  // no-em-dash rule holds regardless of model compliance. Covers every
+  // iMessage caller (interaction replies, morning surface, automations,
+  // proactive) since they all funnel through here.
+  const plain = stripEmDashes(stripMarkdown(text));
   for (const part of chunk(plain)) {
     // Record BEFORE invoking osascript: the receive-side row can land in
     // chat.db within milliseconds, and the poller can run between the send
