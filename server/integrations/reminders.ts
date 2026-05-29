@@ -1,21 +1,15 @@
-import { readdir } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 
-// Apple Reminders READ (Phase 1), local-only. Reads the Reminders Core Data
-// store directly under the existing Full Disk Access grant -- same mechanism as
-// chat.db (node:sqlite, read-only), no new TCC permission and no EventKit/
-// osascript (which would need a per-app grant a launchd daemon can't get).
-//
-// Dates are Core Data timestamps: seconds since 2001-01-01 UTC. unix =
-// value + 978307200. Reading the number avoids osascript locale-string parsing.
+// Apple Reminders READ (Phase 1), Option C: Chief reads a JSON snapshot written
+// by the charlie-side reminders-mirror (com.chief.reminders-mirror). Chief
+// can't read charlie's 0700 Reminders store cross-user (FDA doesn't bypass
+// cross-user POSIX), so the privileged read happens as charlie and lands here.
+// Read-only.
 
-type DatabaseSync = import("node:sqlite").DatabaseSync;
-
-const APPLE_EPOCH_OFFSET = 978307200;
-const STORE_DIR =
-  process.env.CHIEF_REMINDERS_STORE_DIR ??
-  `${homedir()}/Library/Group Containers/group.com.apple.reminders/Container_v1/Stores`;
+const SNAPSHOT =
+  process.env.CHIEF_REMINDERS_SNAPSHOT ?? "/Users/Shared/chief-reminders/reminders.json";
+// Snapshot older than this is flagged stale (the mirror refreshes every ~5m).
+const STALE_MS = Number(process.env.CHIEF_REMINDERS_STALE_MS ?? 30 * 60 * 1000);
 
 export interface Reminder {
   title: string;
@@ -23,93 +17,56 @@ export interface Reminder {
   allDay: boolean;
   completed: boolean;
   list: string;
-  store: string; // which Data-*.sqlite it came from (multi-store visibility)
+  store: string;
 }
 
 export interface ReadResult {
   reminders: Reminder[];
-  storeDir: string;
-  storesScanned: number;
-  storesWithReminders: number;
+  generatedAt: string | null;
+  stale: boolean;
+  source: string;
   errors: string[];
 }
 
-function toIso(due: number | null): string | null {
-  if (due == null || !Number.isFinite(due)) return null;
-  return new Date(Math.round((due + APPLE_EPOCH_OFFSET) * 1000)).toISOString();
+interface Snapshot {
+  generatedAt?: string;
+  reminders?: Reminder[];
+  errors?: string[];
 }
 
 export async function readReminders(opts?: { includeCompleted?: boolean }): Promise<ReadResult> {
-  const result: ReadResult = {
-    reminders: [],
-    storeDir: STORE_DIR,
-    storesScanned: 0,
-    storesWithReminders: 0,
-    errors: [],
-  };
-
-  let files: string[];
+  let raw: string;
   try {
-    files = (await readdir(STORE_DIR)).filter((f) => /^Data-.*\.sqlite$/.test(f));
+    raw = await readFile(SNAPSHOT, "utf8");
   } catch (err) {
-    result.errors.push(`cannot read store dir ${STORE_DIR}: ${String(err)}`);
-    return result;
+    return {
+      reminders: [],
+      generatedAt: null,
+      stale: true,
+      source: SNAPSHOT,
+      errors: [`reminders snapshot not readable at ${SNAPSHOT}: ${String(err)}. Is the reminders-mirror agent running?`],
+    };
   }
 
-  const { DatabaseSync } = await import("node:sqlite");
-  const where = opts?.includeCompleted
-    ? "r.ZTITLE IS NOT NULL"
-    : "r.ZCOMPLETED = 0 AND r.ZTITLE IS NOT NULL";
-
-  for (const f of files) {
-    result.storesScanned += 1;
-    const path = join(STORE_DIR, f);
-    let db: DatabaseSync | null = null;
-    try {
-      db = new DatabaseSync(path, { readOnly: true });
-      const rows = db
-        .prepare(
-          `SELECT r.ZTITLE AS title, r.ZDUEDATE AS due, r.ZALLDAY AS allday,
-                  r.ZCOMPLETED AS completed, l.ZNAME AS list
-           FROM ZREMCDREMINDER r
-           LEFT JOIN ZREMCDBASELIST l ON r.ZLIST = l.Z_PK
-           WHERE ${where}`,
-        )
-        .all() as Array<{
-        title: string;
-        due: number | null;
-        allday: number | null;
-        completed: number | null;
-        list: string | null;
-      }>;
-      if (rows.length > 0) result.storesWithReminders += 1;
-      for (const row of rows) {
-        result.reminders.push({
-          title: row.title,
-          due: toIso(row.due),
-          allDay: Boolean(row.allday),
-          completed: Boolean(row.completed),
-          list: row.list ?? "(no list)",
-          store: f,
-        });
-      }
-    } catch (err) {
-      result.errors.push(`${f}: ${String(err)}`);
-    } finally {
-      try {
-        db?.close();
-      } catch {
-        /* ignore */
-      }
-    }
+  let snap: Snapshot;
+  try {
+    snap = JSON.parse(raw) as Snapshot;
+  } catch (err) {
+    return { reminders: [], generatedAt: null, stale: true, source: SNAPSHOT, errors: [`snapshot parse failed: ${String(err)}`] };
   }
 
-  // Soonest due first; reminders without a due date last.
-  result.reminders.sort((a, b) => {
-    if (a.due && b.due) return a.due.localeCompare(b.due);
-    if (a.due) return -1;
-    if (b.due) return 1;
-    return 0;
-  });
-  return result;
+  const generatedAt = snap.generatedAt ?? null;
+  const ageMs = generatedAt ? Date.now() - new Date(generatedAt).getTime() : Infinity;
+  const all = Array.isArray(snap.reminders) ? snap.reminders : [];
+  // The snapshot already holds only incomplete reminders; the filter is a
+  // harmless guard if that ever changes.
+  const reminders = opts?.includeCompleted ? all : all.filter((r) => !r.completed);
+
+  return {
+    reminders,
+    generatedAt,
+    stale: ageMs > STALE_MS,
+    source: SNAPSHOT,
+    errors: Array.isArray(snap.errors) ? snap.errors : [],
+  };
 }
