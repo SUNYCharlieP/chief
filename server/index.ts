@@ -20,6 +20,7 @@ import {
 } from "./youtube-discover.js";
 import { pickProactiveYoutubeLine } from "./youtube-surface.js";
 import { analyzeVideo } from "./youtube-analyze.js";
+import { readReminders } from "./integrations/reminders.js";
 import { api as convexApi } from "../convex/_generated/api.js";
 import { convex as convexClient } from "./convex-client.js";
 import { handleUserMessage } from "./interaction-agent.js";
@@ -267,6 +268,15 @@ async function main() {
         typeof req.body?.conversationId === "string" ? req.body.conversationId : "test:yt-analyze";
       const report = await analyzeVideo(conversationId, video);
       res.json(report);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Debug: read Apple Reminders (read-only) with full multi-store detail.
+  app.post("/reminders/read", async (_req, res) => {
+    try {
+      res.json(await readReminders());
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

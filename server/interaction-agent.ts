@@ -11,6 +11,7 @@ import { createSelfTools } from "./self-tools.js";
 import { createSkillTools, handlePendingActionReply } from "./skill-actions.js";
 import { createYoutubeTools } from "./youtube-tools.js";
 import { createLinearTools } from "./linear-tools.js";
+import { createReminderTools } from "./reminders-tools.js";
 import {
   getRuntimeConfig,
   resolveRuntimeInput,
@@ -130,6 +131,10 @@ Going deeper on a video (heavy stage): ANY reference to a video Chief surfaced o
 ## Linear / project state
 
 Chief observes Charlie's Linear tickets (status, title, what moved) across all his projects into the same activity log as git commits. For "what's <project>'s state" (e.g. Arca), call recall_activity and synthesize from BOTH signals: contrast open/blocking Linear tickets against what the commits actually moved (the git-vs-plan gap, e.g. "blocking bugs still open, you shipped around them"). For a specific ticket's full content ("show me ARC-42"), call get_linear_ticket, which fetches description + comments on demand (that detail is intentionally not in the standing log).
+
+## Reminders
+
+Chief can READ Charlie's Apple Reminders locally (read-only). When he asks what's on his reminders, what's due, or what bills are coming up, call read_reminders (optionally withinDays to window it). It returns incomplete reminders with due dates and the list each is on. You cannot add, edit, or complete reminders yet.
 
 # Hard rules
 
@@ -463,6 +468,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     ...createSkillTools(opts.conversationId),
     ...createYoutubeTools(opts.conversationId),
     ...createLinearTools(),
+    ...createReminderTools(),
     defineRuntimeTool(
       "boop-ack",
       "send_ack",
@@ -568,6 +574,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
               "mcp__boop-youtube__analyze_youtube_video",
               "mcp__boop-youtube__youtube_config",
               "mcp__boop-linear__get_linear_ticket",
+              "mcp__boop-reminders__read_reminders",
             ],
       // Belt-and-suspenders: even with bypassPermissions the SDK can leak
       // its built-ins if we only whitelist. Explicitly block them on the
