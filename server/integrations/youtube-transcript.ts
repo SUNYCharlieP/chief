@@ -9,7 +9,10 @@ import { join } from "node:path";
 // YouTube's changes and self-updates. Requires a one-time `brew install yt-dlp`
 // on the Chief Mac; if it's absent or fails, callers fall back to description.
 
-const YTDLP = process.env.CHIEF_YTDLP_PATH ?? "yt-dlp";
+// Absolute path by default: the launchd-spawned Chief server doesn't inherit
+// Homebrew's bin on PATH, so a bare "yt-dlp" would ENOENT and silently fall
+// back to no-transcript. Override with CHIEF_YTDLP_PATH if installed elsewhere.
+const YTDLP = process.env.CHIEF_YTDLP_PATH ?? "/opt/homebrew/bin/yt-dlp";
 const TIMEOUT_MS = 60_000;
 
 export interface VideoData {
