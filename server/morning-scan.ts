@@ -14,6 +14,7 @@ import {
 import { getRuntimeConfig } from "./runtime-config.js";
 import { runAgentRuntime } from "./runtimes/index.js";
 import { getUserTimezone } from "./timezone-config.js";
+import { pickProactiveYoutubeLine } from "./youtube-surface.js";
 import { EMPTY_USAGE, type UsageTotals } from "./usage.js";
 
 // Phase 8 morning automation.
@@ -558,6 +559,16 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
   } else {
     body = "no items today";
     source = "scan-missing";
+  }
+
+  // Fold in the YouTube proactive line (at most one), if the day's top held
+  // video clears the bar. If the scan was empty but YouTube has a pick, the
+  // pick replaces "no items today".
+  try {
+    const ytLine = await pickProactiveYoutubeLine({ commit: true });
+    if (ytLine) body = body === "no items today" ? ytLine : `${body}\n\n${ytLine}`;
+  } catch (err) {
+    console.warn(`[morning-surface] youtube line failed: ${String(err)}`);
   }
 
   try {

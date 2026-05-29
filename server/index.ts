@@ -9,6 +9,16 @@ import { startBrainWatcher, stopBrainWatcher } from "./brain.js";
 import { startMorningScan, stopMorningScan, runMorningScan, runMorningSurface } from "./morning-scan.js";
 import { startGitObserver, stopGitObserver, runGitObserver } from "./git-observer.js";
 import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
+import {
+  startYoutubeDiscover,
+  stopYoutubeDiscover,
+  runYoutubeDiscover,
+  seedYoutubeSourcesFromEnv,
+  type PooledCandidate,
+} from "./youtube-discover.js";
+import { pickProactiveYoutubeLine } from "./youtube-surface.js";
+import { api as convexApi } from "../convex/_generated/api.js";
+import { convex as convexClient } from "./convex-client.js";
 import { handleUserMessage } from "./interaction-agent.js";
 import { loadIntegrations } from "./integrations/registry.js";
 import { startCleanupLoop } from "./memory/clean.js";
@@ -201,6 +211,40 @@ async function main() {
     }
   });
 
+  // Debug: run YouTube discovery on demand. Optional body { seedVideos: [...] }
+  // injects fake candidates (each needs videoId/title/description/channelId/
+  // channelTitle/url/publishedAt/source/isMustWatch) to exercise scoring + pool
+  // without the Data API.
+  app.post("/youtube/discover/run", async (req, res) => {
+    try {
+      const seed = req.body?.seedVideos as PooledCandidate[] | undefined;
+      const report = await runYoutubeDiscover(Array.isArray(seed) ? seed : undefined);
+      res.json(report);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Debug: what the on-demand pull would return (held pool, ranked).
+  app.post("/youtube/pull", async (_req, res) => {
+    try {
+      const held = await convexClient.query(convexApi.youtubeVideos.listHeld, { limit: 25 });
+      res.json({ count: held.length, items: held });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Debug: the proactive 7am line that would fire (read-only, no commit/send).
+  app.post("/youtube/proactive/preview", async (_req, res) => {
+    try {
+      const line = await pickProactiveYoutubeLine({ commit: false });
+      res.json({ line });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // Chat endpoint for local testing and the debug dashboard
   app.post("/chat", async (req, res) => {
     const { conversationId, content } = req.body ?? {};
@@ -255,6 +299,14 @@ async function main() {
     console.error("[skill-digest] scheduler failed to start", err),
   );
 
+  seedYoutubeSourcesFromEnv()
+    .then(() =>
+      startYoutubeDiscover().catch((err) =>
+        console.error("[youtube-discover] scheduler failed to start", err),
+      ),
+    )
+    .catch((err) => console.error("[youtube] seed failed", err));
+
   const signalExitCodes = { SIGTERM: 143, SIGINT: 130, SIGHUP: 129 } as const;
   let shuttingDown = false;
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
@@ -265,6 +317,7 @@ async function main() {
       stopMorningScan();
       stopGitObserver();
       stopSkillDigest();
+      stopYoutubeDiscover();
       void stopBrainWatcher();
       closeLocalBrowser()
         .catch(() => undefined)

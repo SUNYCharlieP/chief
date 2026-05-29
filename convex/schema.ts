@@ -400,4 +400,45 @@ export default defineSchema({
     .index("by_candidate_id", ["candidateId"])
     .index("by_pattern_key", ["patternKey"])
     .index("by_status", ["status"]),
+
+  // YouTube passive stage: the held pool. Every scored video lands here and
+  // ages out after a retention window. videoId is the dedupe key, so the same
+  // video is never re-scored.
+  youtubeVideos: defineTable({
+    videoId: v.string(),
+    title: v.string(),
+    description: v.string(),
+    channelId: v.string(),
+    channelTitle: v.string(),
+    url: v.string(),
+    publishedAt: v.string(),
+    source: v.string(), // "topic:<t>" | "channel:<name>"
+    isMustWatch: v.boolean(),
+    score: v.number(),
+    scoreReasons: v.array(v.string()),
+    status: v.union(
+      v.literal("held"),
+      v.literal("surfaced"),
+      v.literal("picked"),
+      v.literal("aged-out"),
+    ),
+    scoredAt: v.number(),
+    expiresAt: v.number(),
+    surfacedAt: v.optional(v.number()),
+    pickedAt: v.optional(v.number()),
+  })
+    .index("by_video_id", ["videoId"])
+    .index("by_status", ["status"])
+    .index("by_expires_at", ["expiresAt"]),
+
+  // YouTube passive stage: curated discovery inputs. topics drive Data API
+  // searches; channels are must-watch creators pulled via free RSS.
+  youtubeSources: defineTable({
+    kind: v.union(v.literal("topic"), v.literal("channel")),
+    value: v.string(), // topic text, or channel display name
+    channelId: v.optional(v.string()),
+    feedUrl: v.optional(v.string()),
+    enabled: v.boolean(),
+    addedAt: v.number(),
+  }).index("by_kind", ["kind"]),
 });

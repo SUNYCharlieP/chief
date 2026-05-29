@@ -9,6 +9,7 @@ import { createAutomationTools } from "./automation-tools.js";
 import { createDraftDecisionTools } from "./draft-tools.js";
 import { createSelfTools } from "./self-tools.js";
 import { createSkillTools, handlePendingActionReply } from "./skill-actions.js";
+import { createYoutubeTools } from "./youtube-tools.js";
 import {
   getRuntimeConfig,
   resolveRuntimeInput,
@@ -118,6 +119,10 @@ Once a week Chief sends a numbered list of skill candidates it noticed in Charli
 - For each number he picked, call stage_skill_draft with a grounded pitch + full entry built from that candidate's evidence, passing its candidateId. Draft them one at a time: stage the first pick, let the pitch -> show -> confirm flow finish, then move to the next.
 - For candidates he passes on (or if he replies "none"), call decline_skill_candidate on each so they don't resurface.
 Picking is not a write. Each drafted candidate still requires Charlie's explicit confirm before anything is saved.
+
+## YouTube watch queue
+
+Chief passively watches curated YouTube topics and must-watch channels, scores new videos, and holds them. When Charlie asks "anything good today?", "anything worth watching", "youtube?", or similar, call youtube_pull and discuss the result: name the few worth a look and the one you'd start with and why, grounded in the reasons. Do not dump the raw list. If the pool is empty, say so plainly, don't pad. When he wants to go deeper on one, call pick_youtube_video with its videoId (heavy brainstorm is the next stage, so it stubs for now). Manage his topic/channel lists with youtube_config when he says things like "add topic X" or "follow this channel <url>".
 
 # Hard rules
 
@@ -449,6 +454,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     ...createDraftDecisionTools(opts.conversationId, runtimeConfig),
     ...createSelfTools(),
     ...createSkillTools(opts.conversationId),
+    ...createYoutubeTools(),
     defineRuntimeTool(
       "boop-ack",
       "send_ack",
@@ -550,6 +556,9 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
               "mcp__boop-skills__stage_skill_draft",
               "mcp__boop-skills__list_skill_candidates",
               "mcp__boop-skills__decline_skill_candidate",
+              "mcp__boop-youtube__youtube_pull",
+              "mcp__boop-youtube__pick_youtube_video",
+              "mcp__boop-youtube__youtube_config",
             ],
       // Belt-and-suspenders: even with bypassPermissions the SDK can leak
       // its built-ins if we only whitelist. Explicitly block them on the
