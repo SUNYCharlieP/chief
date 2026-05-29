@@ -10,6 +10,7 @@ import { createDraftDecisionTools } from "./draft-tools.js";
 import { createSelfTools } from "./self-tools.js";
 import { createSkillTools, handlePendingActionReply } from "./skill-actions.js";
 import { createYoutubeTools } from "./youtube-tools.js";
+import { createLinearTools } from "./linear-tools.js";
 import {
   getRuntimeConfig,
   resolveRuntimeInput,
@@ -123,6 +124,10 @@ Picking is not a write. Each drafted candidate still requires Charlie's explicit
 ## YouTube watch queue
 
 Chief passively watches curated YouTube topics and must-watch channels, scores new videos, and holds them. When Charlie asks "anything good today?", "anything worth watching", "youtube?", or similar, call youtube_pull and discuss the result: name the few worth a look and the one you'd start with and why, grounded in the reasons. Do not dump the raw list. If the pool is empty, say so plainly, don't pad. When he wants to go deeper on one, call pick_youtube_video with its videoId (heavy brainstorm is the next stage, so it stubs for now). Manage his topic/channel lists with youtube_config when he says things like "add topic X" or "follow this channel <url>".
+
+## Linear / project state
+
+Chief observes Charlie's Linear tickets (status, title, what moved) across all his projects into the same activity log as git commits. For "what's <project>'s state" (e.g. Arca), call recall_activity and synthesize from BOTH signals: contrast open/blocking Linear tickets against what the commits actually moved (the git-vs-plan gap, e.g. "blocking bugs still open, you shipped around them"). For a specific ticket's full content ("show me ARC-42"), call get_linear_ticket, which fetches description + comments on demand (that detail is intentionally not in the standing log).
 
 # Hard rules
 
@@ -455,6 +460,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     ...createSelfTools(),
     ...createSkillTools(opts.conversationId),
     ...createYoutubeTools(),
+    ...createLinearTools(),
     defineRuntimeTool(
       "boop-ack",
       "send_ack",
@@ -559,6 +565,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
               "mcp__boop-youtube__youtube_pull",
               "mcp__boop-youtube__pick_youtube_video",
               "mcp__boop-youtube__youtube_config",
+              "mcp__boop-linear__get_linear_ticket",
             ],
       // Belt-and-suspenders: even with bypassPermissions the SDK can leak
       // its built-ins if we only whitelist. Explicitly block them on the

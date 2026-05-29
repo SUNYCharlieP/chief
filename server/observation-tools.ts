@@ -15,7 +15,7 @@ export function createObservationTools(): RuntimeTool[] {
     defineRuntimeTool(
       NAMESPACE,
       "recall_activity",
-      "Read Charlie's recently OBSERVED activity (git commits across his repos, plus competes-flags from the morning scan). Use this to answer 'what have I been working on/spending time on lately', or to ground a proposal in what he's actually been doing. This is observed activity, distinct from recall() which reads saved memories. Returns a list of observations newest first.",
+      "Read Charlie's recently OBSERVED activity: git commits across his repos, Linear ticket status/changes across all his projects, plus competes-flags from the morning scan. Use this to answer 'what have I been working on lately' or 'what's <project>'s state', and to ground proposals in what he's actually been doing. To judge real state, contrast the two signals where a project has both: open/blocking Linear tickets vs what the commits actually moved (the git-vs-plan gap, e.g. 'blocking bugs still open, you shipped around them'). Distinct from recall(), which reads saved memories. Returns observations newest first.",
       {
         sinceHours: z
           .number()
@@ -23,7 +23,7 @@ export function createObservationTools(): RuntimeTool[] {
           .optional()
           .describe("Only return activity from the last N hours. Omit for the default 7-day window."),
         kind: z
-          .enum(["git-commit", "competes-flag", "self-report"])
+          .enum(["git-commit", "competes-flag", "self-report", "linear-ticket"])
           .optional()
           .describe("Filter to one observation kind. Omit for all kinds."),
         limit: z.number().int().positive().max(200).optional().describe("Max items (default 60)."),

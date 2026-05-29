@@ -5,6 +5,7 @@ const kindUnion = v.union(
   v.literal("git-commit"),
   v.literal("competes-flag"),
   v.literal("self-report"),
+  v.literal("linear-ticket"),
 );
 
 // Insert only if the dedupKey hasn't been seen. Returns true if a new row was

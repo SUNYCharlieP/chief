@@ -299,6 +299,7 @@ export default defineSchema({
       v.literal("git-commit"),
       v.literal("competes-flag"),
       v.literal("self-report"),
+      v.literal("linear-ticket"),
     ),
     source: v.string(), // repo name, "morning-scan", etc.
     summary: v.string(),

@@ -8,6 +8,8 @@ import { startImessagePoller, stopImessagePoller } from "./imessage.js";
 import { startBrainWatcher, stopBrainWatcher } from "./brain.js";
 import { startMorningScan, stopMorningScan, runMorningScan, runMorningSurface } from "./morning-scan.js";
 import { startGitObserver, stopGitObserver, runGitObserver } from "./git-observer.js";
+import { startLinearObserver, stopLinearObserver, runLinearObserver } from "./linear-observer.js";
+import { linearStatusProbe } from "./integrations/linear.js";
 import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
 import {
   startYoutubeDiscover,
@@ -211,6 +213,26 @@ async function main() {
     }
   });
 
+  // Debug: run the Linear observer on demand, bypassing the daily cron.
+  app.post("/observe/linear/run", async (_req, res) => {
+    try {
+      const report = await runLinearObserver();
+      res.json(report);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Build-time verification: is Linear connected, what action slugs resolved,
+  // and a raw sample so we can confirm shapes before testing.
+  app.get("/linear/status", async (_req, res) => {
+    try {
+      res.json(await linearStatusProbe());
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // Debug: run YouTube discovery on demand. Optional body { seedVideos: [...] }
   // injects fake candidates (each needs videoId/title/description/channelId/
   // channelTitle/url/publishedAt/source/isMustWatch) to exercise scoring + pool
@@ -295,6 +317,8 @@ async function main() {
 
   startGitObserver();
 
+  startLinearObserver();
+
   startSkillDigest().catch((err) =>
     console.error("[skill-digest] scheduler failed to start", err),
   );
@@ -316,6 +340,7 @@ async function main() {
       stopImessagePoller();
       stopMorningScan();
       stopGitObserver();
+      stopLinearObserver();
       stopSkillDigest();
       stopYoutubeDiscover();
       void stopBrainWatcher();
