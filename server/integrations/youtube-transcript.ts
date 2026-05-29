@@ -28,7 +28,20 @@ function run(args: string[], cwd: string): Promise<string> {
     execFile(
       YTDLP,
       args,
-      { timeout: TIMEOUT_MS, maxBuffer: 24 * 1024 * 1024, cwd },
+      {
+        timeout: TIMEOUT_MS,
+        maxBuffer: 24 * 1024 * 1024,
+        cwd,
+        // yt-dlp shells out to deno/node to solve YouTube's JS challenge for
+        // sub downloads. The launchd-spawned server's PATH lacks Homebrew bin,
+        // so without this the challenge fails silently and no subs download
+        // (metadata still works, masking it as "no transcript"). Put Homebrew
+        // bin on the child's PATH so it can find deno/node.
+        env: {
+          ...process.env,
+          PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ""}`,
+        },
+      },
       (err, stdout, stderr) => {
         if (err) reject(new Error(stderr?.slice(0, 300) || err.message));
         else resolve(stdout);
