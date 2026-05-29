@@ -73,6 +73,30 @@ export const listHeld = query({
   },
 });
 
+// For the on-demand pull: held AND recently-surfaced videos (so the dispatcher
+// can act on what the morning surface already showed), bounded by the retention
+// window (expiresAt > now) so stale surfaced rows don't resurrect. Ranked
+// must-watch first, then score.
+export const listForPull = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const held = await ctx.db
+      .query("youtubeVideos")
+      .withIndex("by_status", (q) => q.eq("status", "held"))
+      .collect();
+    const surfaced = await ctx.db
+      .query("youtubeVideos")
+      .withIndex("by_status", (q) => q.eq("status", "surfaced"))
+      .collect();
+    const rows = [...held, ...surfaced].filter((r) => r.expiresAt > now);
+    rows.sort(
+      (a, b) => Number(b.isMustWatch) - Number(a.isMustWatch) || b.score - a.score,
+    );
+    return rows.slice(0, args.limit ?? 25);
+  },
+});
+
 export const get = query({
   args: { videoId: v.string() },
   handler: async (ctx, args) => {

@@ -15,7 +15,7 @@ export function createYoutubeTools(): RuntimeTool[] {
       'Read the held YouTube pool when Charlie asks "anything good today?", "anything worth watching", "youtube?", etc. Returns held, unexpired videos worth surfacing (must-watch uploads always included; others above the relevance bar), ranked best-first with scores and reasons. Discuss them: name the few worth a look and the one you would start with and why. Do NOT just dump the list.',
       {},
       async () => {
-        const held = await convex.query(api.youtubeVideos.listHeld, { limit: 25 });
+        const held = await convex.query(api.youtubeVideos.listForPull, { limit: 25 });
         const items = held
           .filter((v) => v.isMustWatch || v.score >= PULL_THRESHOLD)
           .map((v) => ({

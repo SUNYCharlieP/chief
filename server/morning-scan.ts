@@ -586,6 +586,17 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
     return { runId, sentTo: contact, bodyChars: body.length, source, elapsedMs: elapsed, error: message };
   }
 
+  // Persist the surfaced body into the conversation so the dispatcher has
+  // memory of what the proactive surface sent (scan check-in + YouTube line).
+  // Same approach as skill-digest: writing a Convex message row does NOT feed
+  // the inbound chat.db poller (it only reads is_from_me=0 device messages) or
+  // the echo-dedupe buffer, so there's no double-processing.
+  await convex.mutation(api.messages.send, {
+    conversationId: `sms:${contact}`,
+    role: "assistant",
+    content: body,
+  });
+
   const elapsed = Date.now() - started;
   await convex.mutation(api.scanRuns.update, {
     runId,
