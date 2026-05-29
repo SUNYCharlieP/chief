@@ -351,7 +351,7 @@ export default defineSchema({
   pendingActions: defineTable({
     actionId: v.string(),
     conversationId: v.string(),
-    kind: v.literal("skills.append"),
+    kind: v.union(v.literal("skills.append"), v.literal("youtube.brainstorm")),
     status: v.union(
       v.literal("pending"),
       v.literal("committed"),
@@ -365,6 +365,8 @@ export default defineSchema({
     // Stage B: links this draft back to the skillCandidate it came from, so the
     // consent gate can mark that candidate skilled/declined on the outcome.
     candidateId: v.optional(v.string()),
+    // YouTube heavy stage: the video a "youtube.brainstorm" gate is waiting on.
+    videoId: v.optional(v.string()),
     shownAt: v.optional(v.number()),
     decidedAt: v.optional(v.number()),
     createdAt: v.number(),
@@ -442,4 +444,18 @@ export default defineSchema({
     enabled: v.boolean(),
     addedAt: v.number(),
   }).index("by_kind", ["kind"]),
+
+  // YouTube heavy stage: per-video analysis (transcript + auto summary). Held
+  // here, not in per-turn context; loaded only when a brainstorm runs.
+  youtubeAnalysis: defineTable({
+    videoId: v.string(),
+    title: v.string(),
+    channelTitle: v.string(),
+    url: v.string(),
+    transcriptStatus: v.union(v.literal("full"), v.literal("partial"), v.literal("none")),
+    transcript: v.string(),
+    summary: v.string(),
+    confidence: v.union(v.literal("high"), v.literal("low")),
+    createdAt: v.number(),
+  }).index("by_video_id", ["videoId"]),
 });

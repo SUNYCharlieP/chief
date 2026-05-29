@@ -19,6 +19,7 @@ import {
   type PooledCandidate,
 } from "./youtube-discover.js";
 import { pickProactiveYoutubeLine } from "./youtube-surface.js";
+import { analyzeVideo } from "./youtube-analyze.js";
 import { api as convexApi } from "../convex/_generated/api.js";
 import { convex as convexClient } from "./convex-client.js";
 import { handleUserMessage } from "./interaction-agent.js";
@@ -252,6 +253,20 @@ async function main() {
     try {
       const held = await convexClient.query(convexApi.youtubeVideos.listHeld, { limit: 25 });
       res.json({ count: held.length, items: held });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Debug: run the heavy-stage analyze (pick -> transcript -> summary -> gate)
+  // on demand. Body { video?: id|URL|"that", conversationId? }.
+  app.post("/youtube/analyze/run", async (req, res) => {
+    try {
+      const video = typeof req.body?.video === "string" ? req.body.video : "";
+      const conversationId =
+        typeof req.body?.conversationId === "string" ? req.body.conversationId : "test:yt-analyze";
+      const report = await analyzeVideo(conversationId, video);
+      res.json(report);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

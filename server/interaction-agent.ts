@@ -123,7 +123,9 @@ Picking is not a write. Each drafted candidate still requires Charlie's explicit
 
 ## YouTube watch queue
 
-Chief passively watches curated YouTube topics and must-watch channels, scores new videos, and holds them. When Charlie asks "anything good today?", "anything worth watching", "youtube?", or similar, call youtube_pull and discuss the result: name the few worth a look and the one you'd start with and why, grounded in the reasons. Do not dump the raw list. If the pool is empty, say so plainly, don't pad. When he wants to go deeper on one, call pick_youtube_video with its videoId (heavy brainstorm is the next stage, so it stubs for now). Manage his topic/channel lists with youtube_config when he says things like "add topic X" or "follow this channel <url>".
+Chief passively watches curated YouTube topics and must-watch channels, scores new videos, and holds them. When Charlie asks "anything good today?", "anything worth watching", "youtube?", or similar, call youtube_pull and discuss the result: name the few worth a look and the one you'd start with and why, grounded in the reasons. Do not dump the raw list. If the pool is empty, say so plainly, don't pad. Manage his topic/channel lists with youtube_config when he says things like "add topic X" or "follow this channel <url>".
+
+Going deeper on a video (heavy stage): ANY reference to a video Chief surfaced or holds, "that video" / "the video you suggested" / "pull up that video" / "tell me about that video" / "go deeper" / "brainstorm on it", or a pasted youtube.com / youtu.be URL, goes to analyze_youtube_video. NEVER spawn_agent for those (spawn_agent is external research only). analyze_youtube_video fetches the transcript, returns an honest summary (low-confidence flagged when there are no captions, never fabricated), and then the system gates the brainstorm: you relay the summary and ask for a yes. Only on Charlie's whole-message "yes" does the brainstorm run (handled by the system, grounded in the transcript + brain). When the brainstorm lands on a technique worth keeping, use stage_skill_draft to draft a Skills.md entry (the normal pitch -> show -> confirm flow).
 
 ## Linear / project state
 
@@ -459,7 +461,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     ...createDraftDecisionTools(opts.conversationId, runtimeConfig),
     ...createSelfTools(),
     ...createSkillTools(opts.conversationId),
-    ...createYoutubeTools(),
+    ...createYoutubeTools(opts.conversationId),
     ...createLinearTools(),
     defineRuntimeTool(
       "boop-ack",
@@ -478,7 +480,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     defineRuntimeTool(
       "boop-spawn",
       "spawn_agent",
-      "Spawn a focused sub-agent to do real work using external tools. Returns the agent's final answer. Use whenever the user's request needs external sources, current information, integrations, file/system access, or verification beyond the visible message context. If the current user message includes images and the sub-agent's task depends on them, pass the relevant storage IDs in imageRefs. On image turns, Boop attaches all current-turn images by default; a non-empty imageRefs list can narrow to a subset.",
+      "Spawn a focused sub-agent for EXTERNAL research and actions: web search/fetch, email, calendar, integrations, file/system access, current information, verification beyond the visible message context. Returns the agent's final answer. SCOPE LIMIT: do NOT use this for a YouTube video Chief surfaced or holds, or for any youtube.com / youtu.be URL, or phrasings like \"that video\" / \"pull up that video\" / \"brainstorm on that video\" -- those go to analyze_youtube_video, never here. If the current user message includes images and the sub-agent's task depends on them, pass the relevant storage IDs in imageRefs. On image turns, Boop attaches all current-turn images by default; a non-empty imageRefs list can narrow to a subset.",
       {
         task: z
           .string()
@@ -563,7 +565,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
               "mcp__boop-skills__list_skill_candidates",
               "mcp__boop-skills__decline_skill_candidate",
               "mcp__boop-youtube__youtube_pull",
-              "mcp__boop-youtube__pick_youtube_video",
+              "mcp__boop-youtube__analyze_youtube_video",
               "mcp__boop-youtube__youtube_config",
               "mcp__boop-linear__get_linear_ticket",
             ],

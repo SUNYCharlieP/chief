@@ -4,6 +4,7 @@ import { convex } from "./convex-client.js";
 import { defineRuntimeTool } from "./runtimes/tool.js";
 import { runtimeText, type RuntimeTool } from "./runtimes/types.js";
 import { appendSkillEntry, sha256 } from "./brain-write.js";
+import { runBrainstormOpening } from "./youtube-analyze.js";
 
 // Stage A draft-and-ask: on-demand Skills.md candidate drafting.
 //
@@ -145,6 +146,24 @@ export async function handlePendingActionReply(
   if (!active) return { handled: false };
 
   const norm = normalize(content);
+
+  // YouTube heavy stage gate: brainstorm runs ONLY on a whole-message
+  // affirmative; anything else discards. Deterministic, no model discretion.
+  if (active.kind === "youtube.brainstorm") {
+    if (AFFIRMATIVES.has(norm)) {
+      await convex.mutation(api.pendingActions.setStatus, {
+        actionId: active.actionId,
+        status: "committed",
+      });
+      const opening = await runBrainstormOpening(active.videoId ?? "");
+      return { handled: true, reply: opening };
+    }
+    await convex.mutation(api.pendingActions.setStatus, {
+      actionId: active.actionId,
+      status: "rejected",
+    });
+    return { handled: false };
+  }
 
   if (AFFIRMATIVES.has(norm)) {
     // Mark committed before the write so a rapid duplicate can't double-commit.

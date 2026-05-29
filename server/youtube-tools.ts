@@ -4,10 +4,11 @@ import { convex } from "./convex-client.js";
 import { defineRuntimeTool } from "./runtimes/tool.js";
 import { runtimeText, type RuntimeTool } from "./runtimes/types.js";
 import { resolveChannelId, channelFeedUrl } from "./integrations/youtube.js";
+import { analyzeVideo } from "./youtube-analyze.js";
 
 const PULL_THRESHOLD = Number(process.env.YOUTUBE_PULL_THRESHOLD ?? 58);
 
-export function createYoutubeTools(): RuntimeTool[] {
+export function createYoutubeTools(conversationId: string): RuntimeTool[] {
   return [
     defineRuntimeTool(
       "boop-youtube",
@@ -38,19 +39,19 @@ export function createYoutubeTools(): RuntimeTool[] {
     ),
     defineRuntimeTool(
       "boop-youtube",
-      "pick_youtube_video",
-      "Mark a YouTube video as picked when Charlie wants to go deeper on it (watch/brainstorm). Pass its videoId from youtube_pull. The heavy transcript+brainstorm stage is not built yet, so this stubs for now.",
-      { videoId: z.string() },
-      async ({ videoId }) => {
-        const v = await convex.query(api.youtubeVideos.get, { videoId });
-        if (!v) return runtimeText(`No held video with id ${videoId}.`, false);
-        await convex.mutation(api.youtubeVideos.setStatus, {
-          videoId,
-          status: "picked",
-          pickedAt: Date.now(),
-        });
+      "analyze_youtube_video",
+      `THE tool for any reference to a YouTube video Chief surfaced or holds, or a pasted YouTube link. Use it for ALL of: "that video", "the video you suggested", "pull up that video", "go deeper on it", "brainstorm on that video", "analyze this video", "tell me about that video", or any youtube.com / youtu.be URL. It picks the video, fetches its transcript (yt-dlp), and returns an honest summary (flagged low-confidence when there are no captions), then gates a deeper brainstorm behind Charlie's explicit yes. This is the correct, structural choice for a video Chief surfaced or a YouTube URL. NEVER use spawn_agent for those, spawn_agent is for external web/integration research only.`,
+      {
+        video: z
+          .string()
+          .optional()
+          .describe('A videoId, a YouTube URL, or omit (or "that") for the most recently surfaced video.'),
+      },
+      async ({ video }) => {
+        const r = await analyzeVideo(conversationId, video ?? "");
+        if (r.error) return runtimeText(r.error, false);
         return runtimeText(
-          `Picked "${v.title}". Brainstorm coming in the next stage (transcript + summary + brainstorm not built yet).`,
+          `Analyzed "${r.title}". transcript=${r.transcriptStatus} confidence=${r.confidence}.\n\nSUMMARY:\n${r.summary}\n\nRelay this summary to Charlie verbatim-ish, then end your reply with exactly:\nReply "yes" to brainstorm how this fits your stack (anything else skips).`,
         );
       },
     ),
