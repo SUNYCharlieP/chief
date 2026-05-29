@@ -66,6 +66,10 @@ async function exec(slug: string, args: Record<string, unknown>): Promise<unknow
   const result = (await composio.tools.execute(slug, {
     userId: boopUserId(),
     arguments: args,
+    // Composio requires a pinned toolkit version or this flag for manual
+    // execution; skip pinning so a toolkit bump doesn't break the observer
+    // silently (same choice as the whoami profile probe).
+    dangerouslySkipVersionCheck: true,
   })) as { data?: unknown; successful?: boolean; error?: unknown };
   if (result.successful === false) {
     throw new Error(`Linear action ${slug} failed: ${JSON.stringify(result.error)}`);
