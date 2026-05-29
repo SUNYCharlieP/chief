@@ -361,6 +361,9 @@ export default defineSchema({
     entry: v.string(),
     targetFile: v.string(),
     sha256: v.string(),
+    // Stage B: links this draft back to the skillCandidate it came from, so the
+    // consent gate can mark that candidate skilled/declined on the outcome.
+    candidateId: v.optional(v.string()),
     shownAt: v.optional(v.number()),
     decidedAt: v.optional(v.number()),
     createdAt: v.number(),
@@ -368,4 +371,33 @@ export default defineSchema({
   })
     .index("by_action_id", ["actionId"])
     .index("by_conversation_status", ["conversationId", "status"]),
+
+  // Stage B: observation-driven Skills.md candidates. Patterns the detector
+  // found in git activity, collected and surfaced on a weekly digest, then fed
+  // into the Stage A draft-and-ask flow on the user's pick. patternKey is the
+  // stable dedup/suppression handle: a declined or skilled pattern is never
+  // re-proposed.
+  skillCandidates: defineTable({
+    candidateId: v.string(),
+    patternKey: v.string(),
+    title: v.string(),
+    rationale: v.string(),
+    evidence: v.string(), // JSON: term, count, days, repos, sample commit summaries
+    status: v.union(
+      v.literal("collected"),
+      v.literal("surfaced"),
+      v.literal("drafting"),
+      v.literal("skilled"),
+      v.literal("declined"),
+    ),
+    occurrences: v.number(),
+    surfaceOrder: v.optional(v.number()),
+    firstSeenAt: v.number(),
+    lastSeenAt: v.number(),
+    surfacedAt: v.optional(v.number()),
+    decidedAt: v.optional(v.number()),
+  })
+    .index("by_candidate_id", ["candidateId"])
+    .index("by_pattern_key", ["patternKey"])
+    .index("by_status", ["status"]),
 });

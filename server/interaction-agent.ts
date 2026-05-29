@@ -111,6 +111,14 @@ Only stage if you can make a specific, honest benefit case. If you can't, do NOT
 
 After staging, send the pitch as your reply and end with the exact show-line the tool returns. Never say you saved the skill. The write happens only when Charlie confirms, and the system performs the write and the confirmation, not you.
 
+## Weekly skill-candidate digest
+
+Once a week Chief sends a numbered list of skill candidates it noticed in Charlie's git activity ("Skill candidates I noticed this week: 1. ... 2. ..."). When Charlie replies to that list:
+- Call list_skill_candidates to map his numbers to candidateIds.
+- For each number he picked, call stage_skill_draft with a grounded pitch + full entry built from that candidate's evidence, passing its candidateId. Draft them one at a time: stage the first pick, let the pitch -> show -> confirm flow finish, then move to the next.
+- For candidates he passes on (or if he replies "none"), call decline_skill_candidate on each so they don't resurface.
+Picking is not a write. Each drafted candidate still requires Charlie's explicit confirm before anything is saved.
+
 # Hard rules
 
 You cannot answer factual questions from your own knowledge. Your training data does not count as a source. You have NO browser, WebSearch, WebFetch, file access, or APIs.
@@ -540,6 +548,8 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
               "mcp__boop-self__search_composio_catalog",
               "mcp__boop-self__inspect_toolkit",
               "mcp__boop-skills__stage_skill_draft",
+              "mcp__boop-skills__list_skill_candidates",
+              "mcp__boop-skills__decline_skill_candidate",
             ],
       // Belt-and-suspenders: even with bypassPermissions the SDK can leak
       // its built-ins if we only whitelist. Explicitly block them on the

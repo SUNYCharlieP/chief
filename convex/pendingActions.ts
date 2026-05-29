@@ -19,6 +19,7 @@ export const create = mutation({
     entry: v.string(),
     targetFile: v.string(),
     sha256: v.string(),
+    candidateId: v.optional(v.string()),
     createdAt: v.number(),
     expiresAt: v.number(),
   },

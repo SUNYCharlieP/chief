@@ -8,6 +8,7 @@ import { startImessagePoller, stopImessagePoller } from "./imessage.js";
 import { startBrainWatcher, stopBrainWatcher } from "./brain.js";
 import { startMorningScan, stopMorningScan, runMorningScan, runMorningSurface } from "./morning-scan.js";
 import { startGitObserver, stopGitObserver, runGitObserver } from "./git-observer.js";
+import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
 import { handleUserMessage } from "./interaction-agent.js";
 import { loadIntegrations } from "./integrations/registry.js";
 import { startCleanupLoop } from "./memory/clean.js";
@@ -189,6 +190,17 @@ async function main() {
     }
   });
 
+  // Debug: run the weekly skill-candidate digest (detect + surface) on demand,
+  // bypassing the Sunday cron.
+  app.post("/skills/digest/run", async (_req, res) => {
+    try {
+      const report = await runSkillDigest();
+      res.json(report);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // Chat endpoint for local testing and the debug dashboard
   app.post("/chat", async (req, res) => {
     const { conversationId, content } = req.body ?? {};
@@ -239,6 +251,10 @@ async function main() {
 
   startGitObserver();
 
+  startSkillDigest().catch((err) =>
+    console.error("[skill-digest] scheduler failed to start", err),
+  );
+
   const signalExitCodes = { SIGTERM: 143, SIGINT: 130, SIGHUP: 129 } as const;
   let shuttingDown = false;
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
@@ -248,6 +264,7 @@ async function main() {
       stopImessagePoller();
       stopMorningScan();
       stopGitObserver();
+      stopSkillDigest();
       void stopBrainWatcher();
       closeLocalBrowser()
         .catch(() => undefined)

@@ -47,7 +47,9 @@ Produce TWO things:
 
 Only stage if you can make a specific, honest benefit case. If you cannot, do NOT call this tool: tell Charlie it is not worth a skill and why, in one line. Never pad a weak case.
 
-After this tool returns, send the pitch as your reply and end with the exact show-line it gives you. Never claim you saved the skill; the write happens only on Charlie's explicit confirm, handled by the system.`,
+After this tool returns, send the pitch as your reply and end with the exact show-line it gives you. Never claim you saved the skill; the write happens only on Charlie's explicit confirm, handled by the system.
+
+When drafting a weekly-digest candidate Charlie picked, pass its candidateId (from list_skill_candidates) so the system can mark that candidate resolved.`,
       {
         name: z.string().describe("Short kebab-case skill name."),
         pitch: z
@@ -58,6 +60,10 @@ After this tool returns, send the pitch as your reply and end with the exact sho
         entry: z
           .string()
           .describe("Full structured Skills.md entry, in the file's existing format."),
+        candidateId: z
+          .string()
+          .optional()
+          .describe("If drafting a picked weekly-digest candidate, its candidateId from list_skill_candidates."),
       },
       async (args) => {
         const actionId = randomId("pa");
@@ -70,12 +76,53 @@ After this tool returns, send the pitch as your reply and end with the exact sho
           entry: args.entry,
           targetFile: "Skills.md",
           sha256: sha256(args.entry),
+          candidateId: args.candidateId,
           createdAt: now,
           expiresAt: now + TTL_MS,
         });
+        if (args.candidateId) {
+          await convex.mutation(api.skillCandidates.setStatus, {
+            candidateId: args.candidateId,
+            status: "drafting",
+          });
+        }
         return runtimeText(
           `Staged skill draft ${actionId}. Reply to Charlie with the pitch text, then on its own final line add exactly:\n${SHOW_LINE}\nDo NOT paste the full entry; it is held until he confirms.`,
         );
+      },
+    ),
+    defineRuntimeTool(
+      "boop-skills",
+      "list_skill_candidates",
+      "List the skill candidates Chief surfaced in the latest weekly digest (status surfaced), so you can map the numbers Charlie replies with to specific candidates. Returns each candidate's index (matching the digest), candidateId, title, rationale, and evidence. Use when Charlie replies to a skill-candidate digest with picks like \"1, 3\".",
+      {},
+      async () => {
+        const rows = await convex.query(api.skillCandidates.listByStatus, {
+          status: "surfaced",
+          limit: 20,
+        });
+        if (rows.length === 0) return runtimeText("No surfaced skill candidates.");
+        const items = rows.map((r) => ({
+          index: r.surfaceOrder ?? null,
+          candidateId: r.candidateId,
+          title: r.title,
+          rationale: r.rationale,
+          evidence: r.evidence,
+        }));
+        return runtimeText(JSON.stringify(items, null, 2));
+      },
+    ),
+    defineRuntimeTool(
+      "boop-skills",
+      "decline_skill_candidate",
+      "Mark a surfaced skill candidate as declined (suppressed, won't resurface). Use for candidates Charlie explicitly passes on, e.g. when he replies \"none\" to the digest.",
+      { candidateId: z.string() },
+      async (args) => {
+        await convex.mutation(api.skillCandidates.setStatus, {
+          candidateId: args.candidateId,
+          status: "declined",
+        });
+        return runtimeText(`Candidate ${args.candidateId} declined.`);
       },
     ),
   ];
@@ -105,6 +152,13 @@ export async function handlePendingActionReply(
       actionId: active.actionId,
       status: "committed",
     });
+    // Stage B link: a written candidate is resolved (skilled), suppressed.
+    if (active.candidateId) {
+      await convex.mutation(api.skillCandidates.setStatus, {
+        candidateId: active.candidateId,
+        status: "skilled",
+      });
+    }
     const res = await appendSkillEntry(active.entry);
     const reply = res.confirmed
       ? `Saved to Skills.md (${res.bytes} bytes appended). Verified in the brain at ${res.mirrorPath}.`
@@ -126,5 +180,13 @@ export async function handlePendingActionReply(
     actionId: active.actionId,
     status: "rejected",
   });
+  // Stage B link: he engaged with the draft and passed, so suppress the
+  // candidate (won't resurface in a future digest).
+  if (active.candidateId) {
+    await convex.mutation(api.skillCandidates.setStatus, {
+      candidateId: active.candidateId,
+      status: "declined",
+    });
+  }
   return { handled: false };
 }
