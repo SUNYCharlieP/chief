@@ -57,27 +57,39 @@ function run(args: string[], cwd: string): Promise<string> {
 export async function fetchVideoData(url: string): Promise<VideoData> {
   const dir = await mkdtemp(join(tmpdir(), "chief-yt-"));
   try {
-    const stdout = await run(
-      [
-        "-q",
-        "--no-warnings",
-        "--skip-download",
-        "--write-auto-subs",
-        "--write-subs",
-        "--sub-langs",
-        "en.*,en",
-        "--sub-format",
-        "json3",
-        "--dump-json",
-        "-o",
-        join(dir, "%(id)s.%(ext)s"),
-        url,
-      ],
-      dir,
-    );
+    // Call 1: download subs (json3). MUST NOT include --dump-json, which
+    // implies --simulate and suppresses all file writes (the bug that made
+    // every fetch fall back). --skip-download skips only the video stream.
+    try {
+      await run(
+        [
+          "-q",
+          "--no-warnings",
+          "--skip-download",
+          "--write-auto-subs",
+          "--write-subs",
+          "--sub-langs",
+          "en.*,en",
+          "--sub-format",
+          "json3",
+          "-o",
+          join(dir, "%(id)s.%(ext)s"),
+          url,
+        ],
+        dir,
+      );
+    } catch {
+      /* no subs for this video, or fetch issue -> handled by fallback below */
+    }
 
+    // Call 2: metadata only (title/description/chapters). --dump-json's
+    // simulate mode is fine here since we want stdout, not files.
     let meta: Record<string, unknown> = {};
     try {
+      const stdout = await run(
+        ["-q", "--no-warnings", "--skip-download", "--dump-json", url],
+        dir,
+      );
       const lastLine = stdout.trim().split("\n").pop() || "{}";
       meta = JSON.parse(lastLine) as Record<string, unknown>;
     } catch {
