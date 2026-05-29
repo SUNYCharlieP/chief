@@ -32,11 +32,20 @@ async function resolveSlug(...keywords: string[]): Promise<string | null> {
 }
 
 export async function resolvedLinearSlugs(): Promise<Record<string, string | null>> {
+  const slugs = await linearSlugs();
+  // Prefer the exact canonical slugs confirmed from the live catalog; fall back
+  // to a keyword match so this survives catalog renames. Exact-first avoids the
+  // earlier mis-hits (LINEAR_LIST_ISSUE_DRAFTS / LINEAR_GET_ISSUE_DEFAULTS).
+  const exact = (...candidates: string[]): string | null =>
+    candidates.find((c) => slugs.includes(c)) ?? null;
   return {
-    listIssues: (await resolveSlug("LIST", "ISSUE")) ?? (await resolveSlug("GET", "ISSUES")),
-    getIssue: (await resolveSlug("GET", "ISSUE")),
-    listComments: (await resolveSlug("LIST", "COMMENT")) ?? (await resolveSlug("GET", "COMMENT")),
-    currentUser: (await resolveSlug("CURRENT", "USER")) ?? "LINEAR_GET_CURRENT_USER",
+    listIssues:
+      exact("LINEAR_LIST_LINEAR_ISSUES", "LINEAR_SEARCH_ISSUES", "LINEAR_LIST_ISSUES_BY_TEAM_ID") ??
+      (await resolveSlug("LIST", "LINEAR", "ISSUES")),
+    getIssue: exact("LINEAR_GET_LINEAR_ISSUE") ?? (await resolveSlug("GET", "LINEAR", "ISSUE")),
+    listComments: exact("LINEAR_LIST_LINEAR_COMMENTS", "LINEAR_LIST_COMMENTS"),
+    listProjects: exact("LINEAR_LIST_LINEAR_PROJECTS"),
+    currentUser: exact("LINEAR_GET_CURRENT_USER") ?? "LINEAR_GET_CURRENT_USER",
   };
 }
 
