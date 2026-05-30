@@ -58,7 +58,8 @@ async function main() {
                   r.ZCOMPLETED AS completed, l.ZNAME AS list, r.ZNOTES AS notes
            FROM ZREMCDREMINDER r
            LEFT JOIN ZREMCDBASELIST l ON r.ZLIST = l.Z_PK
-           WHERE r.ZCOMPLETED = 0 AND r.ZTITLE IS NOT NULL`,
+           WHERE r.ZCOMPLETED = 0 AND r.ZTITLE IS NOT NULL
+                 AND (r.ZMARKEDFORDELETION = 0 OR r.ZMARKEDFORDELETION IS NULL)`,
         )
         .all();
       if (rows.length > 0) storesWithReminders += 1;
