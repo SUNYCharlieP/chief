@@ -80,8 +80,8 @@ When Charlie named a weekday, pass statedWeekday. A deterministic guard rejects 
           return runtimeText(`dueISO "${dueISO}" is not a full YYYY-MM-DD date. Recompute the absolute date against today and call stage_reminder again.`, false);
         }
         const dueLocal = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])); // local midnight
-        const now = new Date();
-        const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const nowDate = new Date();
+        const todayLocal = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate());
         const fmt = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
         if (dueLocal.getTime() < todayLocal.getTime()) {
           return runtimeText(`Rejected: ${fmt(dueLocal)} is in the PAST (today is ${fmt(todayLocal)}). A reminder is never for a past date. Recompute the absolute date against today (mind the YEAR) and call stage_reminder again.`, false);
