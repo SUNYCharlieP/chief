@@ -15,6 +15,7 @@ import { getRuntimeConfig } from "./runtime-config.js";
 import { runAgentRuntime } from "./runtimes/index.js";
 import { getUserTimezone } from "./timezone-config.js";
 import { pickProactiveYoutubeLine } from "./youtube-surface.js";
+import { buildBriefing } from "./briefing.js";
 import { EMPTY_USAGE, type UsageTotals } from "./usage.js";
 
 // Phase 8 morning automation.
@@ -569,6 +570,19 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
     if (ytLine) body = body === "no items today" ? ytLine : `${body}\n\n${ytLine}`;
   } catch (err) {
     console.warn(`[morning-surface] youtube line failed: ${String(err)}`);
+  }
+
+  // Phase 5: prepend the morning briefing (date/weather, due-soon bills,
+  // gentle past-due, my schedule, partner's schedule) ABOVE the tech check-in +
+  // YouTube line. Try/caught so a briefing failure can never break the existing
+  // surface; on failure the message sends exactly as before.
+  try {
+    const briefing = await buildBriefing();
+    if (briefing && briefing.trim().length > 0) {
+      body = `${briefing}\n\n${body}`;
+    }
+  } catch (err) {
+    console.warn(`[morning-surface] briefing failed: ${String(err)}`);
   }
 
   try {
