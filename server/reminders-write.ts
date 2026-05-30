@@ -49,6 +49,35 @@ export function humanDate(dueISO: string): string {
   });
 }
 
+// Deterministic date guard: reject a past dueISO or one whose weekday doesn't
+// match what the user said. Pure + injectable `now` so it's testable. The
+// em-dash-strip philosophy for dates: enforced in code, not prompt+vigilance.
+export function checkReminderDate(
+  dueISO: string,
+  statedWeekday?: string,
+  now: Date = new Date(),
+): { ok: true } | { ok: false; reason: string } {
+  const m = dueISO.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) {
+    return { ok: false, reason: `dueISO "${dueISO}" is not a full YYYY-MM-DD date. Recompute the absolute date against today and call stage_reminder again.` };
+  }
+  const dueLocal = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const fmt = (dt: Date) =>
+    `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+  if (dueLocal.getTime() < todayLocal.getTime()) {
+    return { ok: false, reason: `Rejected: ${fmt(dueLocal)} is in the PAST (today is ${fmt(todayLocal)}). A reminder is never for a past date. Recompute against today (mind the YEAR) and call stage_reminder again.` };
+  }
+  if (statedWeekday) {
+    const names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const statedIdx = names.indexOf(statedWeekday.trim().toLowerCase());
+    if (statedIdx >= 0 && statedIdx !== dueLocal.getDay()) {
+      return { ok: false, reason: `Rejected: ${fmt(dueLocal)} is a ${names[dueLocal.getDay()]}, but Charlie said "${statedWeekday}". Today is ${fmt(todayLocal)}. Recompute the correct ${statedWeekday} date and call again.` };
+    }
+  }
+  return { ok: true };
+}
+
 export async function submitReminderAdd(req: ReminderAddRequest): Promise<AddResult> {
   const requestId = randomId("rem");
   await mkdir(SPOOL_DIR, { recursive: true });

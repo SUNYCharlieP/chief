@@ -4,7 +4,7 @@ import { convex } from "./convex-client.js";
 import { defineRuntimeTool } from "./runtimes/tool.js";
 import { runtimeText, type RuntimeTool } from "./runtimes/types.js";
 import { readReminders } from "./integrations/reminders.js";
-import { humanDate } from "./reminders-write.js";
+import { humanDate, checkReminderDate } from "./reminders-write.js";
 
 function randomId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -72,27 +72,10 @@ When Charlie named a weekday, pass statedWeekday. A deterministic guard rejects 
           .describe('If Charlie named a weekday ("Friday", "next Tuesday"), pass that weekday here so the date is verified against it.'),
       },
       async ({ title, dueISO, list, amount, statedWeekday }) => {
-        // DETERMINISTIC DATE GUARD (em-dash-strip philosophy: enforce in code,
-        // don't trust the model's date math). Runs before any draft is shown;
-        // a rejection makes the model recompute and call again.
-        const m = dueISO.match(/(\d{4})-(\d{2})-(\d{2})/);
-        if (!m) {
-          return runtimeText(`dueISO "${dueISO}" is not a full YYYY-MM-DD date. Recompute the absolute date against today and call stage_reminder again.`, false);
-        }
-        const dueLocal = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])); // local midnight
-        const nowDate = new Date();
-        const todayLocal = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate());
-        const fmt = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-        if (dueLocal.getTime() < todayLocal.getTime()) {
-          return runtimeText(`Rejected: ${fmt(dueLocal)} is in the PAST (today is ${fmt(todayLocal)}). A reminder is never for a past date. Recompute the absolute date against today (mind the YEAR) and call stage_reminder again.`, false);
-        }
-        if (statedWeekday) {
-          const names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-          const statedIdx = names.indexOf(statedWeekday.trim().toLowerCase());
-          if (statedIdx >= 0 && statedIdx !== dueLocal.getDay()) {
-            return runtimeText(`Rejected: ${fmt(dueLocal)} is a ${names[dueLocal.getDay()]}, but Charlie said "${statedWeekday}". Today is ${fmt(todayLocal)}. Recompute the correct ${statedWeekday} date and call again.`, false);
-          }
-        }
+        // DETERMINISTIC DATE GUARD: rejects past or weekday-mismatched dates
+        // before any draft is shown; a rejection makes the model recompute.
+        const check = checkReminderDate(dueISO, statedWeekday);
+        if (!check.ok) return runtimeText(check.reason, false);
 
         const actionId = randomId("pa");
         const now = Date.now();
