@@ -14,7 +14,7 @@ import {
 import { getRuntimeConfig } from "./runtime-config.js";
 import { runAgentRuntime } from "./runtimes/index.js";
 import { getUserTimezone } from "./timezone-config.js";
-import { pickProactiveYoutubeLine } from "./youtube-surface.js";
+import { pickProactiveYoutubeLine, commitYoutubeSurfaced } from "./youtube-surface.js";
 import { buildBriefing } from "./briefing.js";
 import { EMPTY_USAGE, type UsageTotals } from "./usage.js";
 
@@ -539,6 +539,9 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
   let body: string;
   let source: SurfaceReport["source"];
 
+  // Candidates to mark surfaced ONLY after a confirmed send (not before, so a
+  // dropped send doesn't permanently suppress today's items).
+  let surfaceCandidateIds: string[] = [];
   if (latest && latest.formattedCheckIn && latest.formattedCheckIn.trim().length > 0) {
     body = latest.formattedCheckIn.trim();
     source = "scan-formatted";
@@ -546,14 +549,7 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
       scanRunId: latest.runId,
       limit: 3,
     });
-    const now = Date.now();
-    for (const c of cands) {
-      await convex.mutation(api.scanCandidates.setStatus, {
-        candidateId: c.candidateId,
-        status: "surfaced",
-        surfacedAt: now,
-      });
-    }
+    surfaceCandidateIds = cands.map((c) => c.candidateId);
   } else if (latest) {
     body = "no items today";
     source = "no-items";
@@ -564,10 +560,14 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
 
   // Fold in the YouTube proactive line (at most one), if the day's top held
   // video clears the bar. If the scan was empty but YouTube has a pick, the
-  // pick replaces "no items today".
+  // pick replaces "no items today". Pick now, COMMIT only after a confirmed send.
+  let ytVideoId: string | null = null;
   try {
-    const ytLine = await pickProactiveYoutubeLine({ commit: true });
-    if (ytLine) body = body === "no items today" ? ytLine : `${body}\n\n${ytLine}`;
+    const yt = await pickProactiveYoutubeLine();
+    if (yt) {
+      body = body === "no items today" ? yt.line : `${body}\n\n${yt.line}`;
+      ytVideoId = yt.videoId;
+    }
   } catch (err) {
     console.warn(`[morning-surface] youtube line failed: ${String(err)}`);
   }
@@ -585,20 +585,38 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
     console.warn(`[morning-surface] briefing failed: ${String(err)}`);
   }
 
+  let sent = false;
   try {
-    await sendImessage(contact, body);
+    sent = await sendImessage(contact, body);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    sent = false;
+    console.error(`[morning-surface] send threw: ${String(err)}`);
+  }
+  if (!sent) {
+    // Send dropped. Do NOT mark candidates surfaced or commit the YouTube pick,
+    // so the items remain available for the next run rather than being silently
+    // suppressed by a send that never went out.
     const elapsed = Date.now() - started;
     await convex.mutation(api.scanRuns.update, {
       runId,
       status: "failed",
-      error: message,
+      error: "iMessage send failed",
       elapsedMs: elapsed,
       surfaceLog: body,
     });
-    return { runId, sentTo: contact, bodyChars: body.length, source, elapsedMs: elapsed, error: message };
+    return { runId, sentTo: contact, bodyChars: body.length, source, elapsedMs: elapsed, error: "iMessage send failed" };
   }
+
+  // CONFIRMED sent: only now commit the surfaced state.
+  const surfacedAt = Date.now();
+  for (const candidateId of surfaceCandidateIds) {
+    await convex.mutation(api.scanCandidates.setStatus, {
+      candidateId,
+      status: "surfaced",
+      surfacedAt,
+    });
+  }
+  if (ytVideoId) await commitYoutubeSurfaced(ytVideoId);
 
   // Persist the surfaced body into the conversation so the dispatcher has
   // memory of what the proactive surface sent (scan check-in + YouTube line).

@@ -176,14 +176,18 @@ function sendViaApplescript(guid: string, text: string): Promise<void> {
   });
 }
 
-export async function sendImessage(toNumber: string, text: string): Promise<void> {
+// Returns true only when every chunk was handed to iMessage successfully.
+// Returns false on no resolvable chat or any send failure, so callers that
+// commit state on delivery (proactive markSurfaced/ration, morning surface
+// candidate marking) can avoid recording a send that never went out.
+export async function sendImessage(toNumber: string, text: string): Promise<boolean> {
   // Resolve chat lazily so callers from automations / proactive paths still
   // work even if the poller hasn't started yet.
   if (!chatGuid) {
     const resolved = await resolveChat(toNumber);
     if (!resolved) {
       console.error(`[imessage] no chat found for ${toNumber}`);
-      return;
+      return false;
     }
     chatId = resolved.rowid;
     chatGuid = resolved.guid;
@@ -193,6 +197,7 @@ export async function sendImessage(toNumber: string, text: string): Promise<void
   // iMessage caller (interaction replies, morning surface, automations,
   // proactive) since they all funnel through here.
   const plain = stripEmDashes(stripMarkdown(text));
+  let allSent = true;
   for (const part of chunk(plain)) {
     // Record BEFORE invoking osascript: the receive-side row can land in
     // chat.db within milliseconds, and the poller can run between the send
@@ -206,8 +211,10 @@ export async function sendImessage(toNumber: string, text: string): Promise<void
       console.log(`[imessage] → sent ${part.length} chars to ${toNumber}`);
     } catch (err) {
       console.error(`[imessage] send failed:`, err);
+      allSent = false;
     }
   }
+  return allSent;
 }
 
 async function pollOnce(): Promise<void> {

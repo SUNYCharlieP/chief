@@ -306,8 +306,8 @@ async function main() {
   // Debug: the proactive 7am line that would fire (read-only, no commit/send).
   app.post("/youtube/proactive/preview", async (_req, res) => {
     try {
-      const line = await pickProactiveYoutubeLine({ commit: false });
-      res.json({ line });
+      const pick = await pickProactiveYoutubeLine();
+      res.json({ line: pick?.line ?? null });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

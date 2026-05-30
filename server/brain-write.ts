@@ -40,8 +40,15 @@ export async function appendSkillEntry(rawEntry: string): Promise<AppendResult> 
   // written Skills.md obeys the no-em-dash rule regardless of what the model
   // drafted. Everything downstream (bytes, hash, payload, mirror poll) uses the
   // cleaned entry.
-  const entry = stripEmDashes(rawEntry);
+  const cleaned = stripEmDashes(rawEntry);
   const requestId = randomId("bw");
+  // Stamp a unique marker (invisible HTML comment) onto the appended entry so
+  // confirmation verifies THIS write landed, not that matching text exists. The
+  // old content-match (body.includes(entry)) false-confirmed when an identical
+  // entry was already present. The writer appends `entry` verbatim, so the
+  // marker rides through into Skills.md and the mirror.
+  const marker = `<!-- chief-req:${requestId} -->`;
+  const entry = `${cleaned}\n${marker}`;
   const bytes = Buffer.byteLength(entry, "utf8");
   await mkdir(SPOOL_DIR, { recursive: true });
 
@@ -60,17 +67,17 @@ export async function appendSkillEntry(rawEntry: string): Promise<AppendResult> 
   await writeFile(tmp, payload, "utf8");
   await rename(tmp, finalPath);
 
-  const confirmed = await pollMirrorForEntry(entry);
+  const confirmed = await pollMirrorForMarker(marker);
   return { confirmed, mirrorPath: resolve(MIRROR_DIR, "Skills.md"), bytes, requestId };
 }
 
-async function pollMirrorForEntry(entry: string): Promise<boolean> {
+// Confirm THIS write by its unique requestId marker, never by entry content.
+async function pollMirrorForMarker(marker: string): Promise<boolean> {
   const mirrorSkills = resolve(MIRROR_DIR, "Skills.md");
-  const needle = entry.trim();
   for (let i = 0; i < POLL_TRIES; i++) {
     try {
       const body = await readFile(mirrorSkills, "utf8");
-      if (body.includes(needle)) return true;
+      if (body.includes(marker)) return true;
     } catch {
       // mirror not readable yet; retry
     }

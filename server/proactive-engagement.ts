@@ -137,6 +137,7 @@ export type ProactiveGate =
   | "no-fresh-signal"
   | "below-bar"
   | "no-contact"
+  | "send-failed"
   | "fired";
 
 export interface ProactiveResult {
@@ -238,7 +239,14 @@ export async function runProactiveCheck(opts: ProactiveOpts = {}): Promise<Proac
   // GATE 6: the actual send is reached ONLY after every gate passed.
   const contact = process.env.CHIEF_CONTACT ?? "";
   if (!contact) return { ...out, decision: "silent", gate: "no-contact" };
-  await sendImessage(contact, best.message);
+  const sent = await sendImessage(contact, best.message);
+  if (!sent) {
+    // The send was dropped. Do NOT mark the observation surfaced and do NOT burn
+    // a ration slot: it stays fresh and retryable on a later tick, rather than
+    // being silently lost. (sendImessage returns false on no-chat or any chunk
+    // failure, instead of the old swallow-and-pretend-success.)
+    return { ...out, decision: "silent", gate: "send-failed" };
+  }
   // Persist so the dispatcher remembers what it proactively said (no amnesia).
   // This convex row does NOT feed the inbound chat.db poller, so no re-processing.
   await convex.mutation(api.messages.send, {
@@ -246,7 +254,8 @@ export async function runProactiveCheck(opts: ProactiveOpts = {}): Promise<Proac
     role: "assistant",
     content: best.message,
   });
-  // Anti-nag: mark surfaced on SEND (not on reply) so it never re-fires.
+  // Anti-nag: mark surfaced on CONFIRMED send (not on reply) so it never
+  // re-fires, and only then consume the daily ration.
   await convex.mutation(api.proactive.markSurfaced, { dedupKey: chosen.dedupKey, date });
   await convex.mutation(api.proactive.incrementCount, { date });
   return out;
