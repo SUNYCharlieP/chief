@@ -7,6 +7,7 @@ import { addClient } from "./broadcast.js";
 import { startImessagePoller, stopImessagePoller } from "./imessage.js";
 import { startBrainWatcher, stopBrainWatcher } from "./brain.js";
 import { startMorningScan, stopMorningScan, runMorningScan, runMorningSurface } from "./morning-scan.js";
+import { startProactiveEngagement, runProactiveCheck } from "./proactive-engagement.js";
 import { startGitObserver, stopGitObserver, runGitObserver } from "./git-observer.js";
 import { startLinearObserver, stopLinearObserver, runLinearObserver } from "./linear-observer.js";
 import { linearStatusProbe } from "./integrations/linear.js";
@@ -302,6 +303,23 @@ async function main() {
     }
   });
 
+  // Debug: force a proactive-engagement tick. Respects EVERY structural gate.
+  // Body may pass {dryRun, dateOverride, nowOverride} for gate testing; dryRun
+  // runs the gates + LLM but never sends or mutates state.
+  app.post("/proactive/check", async (req, res) => {
+    try {
+      const b = (req.body ?? {}) as { dryRun?: boolean; dateOverride?: string; nowOverride?: string };
+      const result = await runProactiveCheck({
+        dryRun: b.dryRun,
+        dateOverride: b.dateOverride,
+        nowOverride: b.nowOverride ? new Date(b.nowOverride) : undefined,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // Chat endpoint for local testing and the debug dashboard
   app.post("/chat", async (req, res) => {
     const { conversationId, content } = req.body ?? {};
@@ -348,6 +366,10 @@ async function main() {
 
   startMorningScan().catch((err) =>
     console.error("[morning-scan] scheduler failed to start", err),
+  );
+
+  startProactiveEngagement().catch((err) =>
+    console.error("[proactive] scheduler failed to start", err),
   );
 
   startGitObserver();

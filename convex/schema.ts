@@ -462,4 +462,24 @@ export default defineSchema({
     confidence: v.union(v.literal("high"), v.literal("low")),
     createdAt: v.number(),
   }).index("by_video_id", ["videoId"]),
+
+  // Proactive engagement: per-day ration counter + mute flag. One row per local
+  // date. count is the number of self-initiated pings sent today (the 7am
+  // briefing does NOT touch this). muted pauses self-initiation for the day and
+  // resets automatically because tomorrow gets a fresh row.
+  proactiveDaily: defineTable({
+    date: v.string(), // YYYY-MM-DD in the user's local timezone
+    count: v.number(),
+    muted: v.boolean(),
+    updatedAt: v.number(),
+  }).index("by_date", ["date"]),
+
+  // Proactive engagement: anti-nag dedupe. A row is written on SEND (not on
+  // reply), keyed by the observation's dedupKey, so an already-surfaced
+  // observation (or an ignored reflective question) never re-fires.
+  proactiveSurfaced: defineTable({
+    dedupKey: v.string(),
+    date: v.string(),
+    surfacedAt: v.number(),
+  }).index("by_dedup_key", ["dedupKey"]),
 });

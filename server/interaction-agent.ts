@@ -9,6 +9,7 @@ import { createAutomationTools } from "./automation-tools.js";
 import { createDraftDecisionTools } from "./draft-tools.js";
 import { createSelfTools } from "./self-tools.js";
 import { createSkillTools, handlePendingActionReply } from "./skill-actions.js";
+import { handleProactiveMute } from "./proactive-engagement.js";
 import { createYoutubeTools } from "./youtube-tools.js";
 import { createLinearTools } from "./linear-tools.js";
 import { createReminderTools } from "./reminders-tools.js";
@@ -340,6 +341,25 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
   // else discards the draft and falls through to normal handling. Consent is
   // never delegated to the model.
   if (opts.kind !== "proactive") {
+    // Deterministic proactive-mute (pre-LLM). A whole-message mute keyword
+    // pauses self-initiated pings for the rest of the local day. It runs BEFORE
+    // the pending-action gate but only sets a flag and returns, so an open
+    // draft-and-ask confirmation is left intact: mute suppresses initiation, it
+    // never eats a pending confirmation. Replies to Charlie are unaffected.
+    const muteReply = await handleProactiveMute(opts.content);
+    if (muteReply) {
+      broadcast("assistant_message", { conversationId: opts.conversationId, content: muteReply });
+      if (opts.persistAssistantReply) {
+        await convex.mutation(api.messages.send, {
+          conversationId: opts.conversationId,
+          role: "assistant",
+          content: muteReply,
+          turnId,
+        });
+      }
+      return muteReply;
+    }
+
     const gate = await handlePendingActionReply(opts.conversationId, opts.content);
     if (gate.handled && typeof gate.reply === "string") {
       const reply = gate.reply;
