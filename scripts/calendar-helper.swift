@@ -53,7 +53,9 @@ let sourceFilter = (env["CHIEF_CALENDAR_SOURCES"] ?? "iCloud")
 let now = Date()
 let end = Calendar.current.date(byAdding: .day, value: windowDays, to: now) ?? now
 
-// iCloud source(s) only. Phase 4 (Google) is a separate source/mirror.
+// Sources are env-driven (CHIEF_CALENDAR_SOURCES, substring match on
+// EKSource.title). EventKit reads all locally-synced accounts, so adding a
+// source is just one more token in the filter, no per-account API.
 let wantedCals = store.calendars(for: .event).filter { c in
     sourceFilter.contains { c.source.title.lowercased().contains($0) }
 }
@@ -70,6 +72,11 @@ humanFmt.timeZone = TimeZone.current
 let dayFmt = DateFormatter()
 dayFmt.dateFormat = "EEE, MMM d"
 dayFmt.timeZone = TimeZone.current
+// ISO date-only for all-day events, so the Chief-side withinDays filter
+// (new Date(start)) can parse them and they aren't silently dropped.
+let isoDayFmt = DateFormatter()
+isoDayFmt.dateFormat = "yyyy-MM-dd"
+isoDayFmt.timeZone = TimeZone.current
 
 var out: [OutEvent] = []
 if !wantedCals.isEmpty {
@@ -77,8 +84,8 @@ if !wantedCals.isEmpty {
     // events(matching:) returns EXPANDED occurrences with exceptions + modified
     // instances already applied by EventKit.
     for ev in store.events(matching: pred) {
-        let startISO = ev.isAllDay ? dayFmt.string(from: ev.startDate) : isoFmt.string(from: ev.startDate)
-        let endISO = ev.isAllDay ? dayFmt.string(from: ev.endDate) : isoFmt.string(from: ev.endDate)
+        let startISO = ev.isAllDay ? isoDayFmt.string(from: ev.startDate) : isoFmt.string(from: ev.startDate)
+        let endISO = ev.isAllDay ? isoDayFmt.string(from: ev.endDate) : isoFmt.string(from: ev.endDate)
         let startH = ev.isAllDay ? dayFmt.string(from: ev.startDate) + " (all day)" : humanFmt.string(from: ev.startDate)
         let endH = ev.isAllDay ? dayFmt.string(from: ev.endDate) + " (all day)" : humanFmt.string(from: ev.endDate)
         out.append(OutEvent(
