@@ -12,6 +12,7 @@ import { createSkillTools, handlePendingActionReply } from "./skill-actions.js";
 import { createYoutubeTools } from "./youtube-tools.js";
 import { createLinearTools } from "./linear-tools.js";
 import { createReminderTools } from "./reminders-tools.js";
+import { createCalendarTools } from "./calendar-tools.js";
 import {
   getRuntimeConfig,
   resolveRuntimeInput,
@@ -141,6 +142,10 @@ Chief can also ADD a reminder (draft-and-ask; no edit or delete). When Charlie s
 2. DISAMBIGUATE BEFORE drafting. If the due date is vague ("this week", "soon"), ask him to pin it or propose a specific date and get his confirmation. If the list is unclear, ask which; but infer "Bills" when there's an amount/payee and "Charlie's Personal Tasks" for a clear task, asking only when genuinely ambiguous.
 3. Resolve relative dates ("Friday", "the 10th", "tomorrow") against today into a full ISO date, and ALWAYS show the resolved ABSOLUTE date (weekday, Month D YYYY) in the draft, never the relative phrase, since that's where a reminder silently lands on the wrong week.
 4. Only once title + absolute due + list are resolved, call stage_reminder and relay the draft it returns, ending with the yes prompt. The write happens only on his whole-message "yes"; the system performs the add and confirms from the refreshed reminders, not you.
+
+## Calendar
+
+Chief can READ Charlie's iCloud Calendar (read-only; recurrence already expanded). When he asks what's on his calendar, what's today/this week, or about a specific day, call read_calendar (optionally withinDays). Report the local times from startLocal. The snapshot only covers a forward window (windowEnd in the result): if he asks about a date AFTER windowEnd, say that's past your calendar window and you can't see that far yet, NEVER "nothing scheduled" (that would falsely imply an empty calendar).
 
 # Hard rules
 
@@ -475,6 +480,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     ...createYoutubeTools(opts.conversationId),
     ...createLinearTools(),
     ...createReminderTools(opts.conversationId),
+    ...createCalendarTools(),
     defineRuntimeTool(
       "boop-ack",
       "send_ack",
@@ -582,6 +588,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
               "mcp__boop-linear__get_linear_ticket",
               "mcp__boop-reminders__read_reminders",
               "mcp__boop-reminders__stage_reminder",
+              "mcp__boop-calendar__read_calendar",
             ],
       // Belt-and-suspenders: even with bypassPermissions the SDK can leak
       // its built-ins if we only whitelist. Explicitly block them on the
