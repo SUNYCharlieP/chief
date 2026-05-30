@@ -292,7 +292,12 @@ export async function runMorningScan(): Promise<ScanReport> {
   const timezone = (await getUserTimezone()) ?? "UTC";
   const date = todayLocalDate(timezone);
 
-  await convex.mutation(api.scanRuns.create, { runId, kind: "scan" });
+  // The create is the scan's FIRST Convex touch, so it eats the morning cold
+  // start (dev deployment with no workers after the Mac's overnight sleep). If
+  // it still fails after retries, throw to the cron tick: no run row was ever
+  // written, so there is nothing orphaned - an honest "never ran", not a ghost
+  // stuck at "running".
+  await withConvexRetry(() => convex.mutation(api.scanRuns.create, { runId, kind: "scan" }));
 
   const report: ScanReport = {
     runId,
@@ -334,10 +339,11 @@ export async function runMorningScan(): Promise<ScanReport> {
 
     for (const source of sources) {
       report.sourcesTouched.push(source.name);
-      const existing = await convex.query(api.dailyScanCost.getForDateSource, {
-        date,
-        source: source.name,
-      });
+      // Early per-source reads/writes also land inside the cold-start window,
+      // so they get the same WorkerOverloaded retry/backoff as the create above.
+      const existing = await withConvexRetry(() =>
+        convex.query(api.dailyScanCost.getForDateSource, { date, source: source.name }),
+      );
       if (existing?.hitBudgetCap) {
         report.errors.push(`${source.name}: budget cap already hit today, skipping`);
         continue;
@@ -345,22 +351,26 @@ export async function runMorningScan(): Promise<ScanReport> {
       const { items, error } = await fastPassSource(source);
       if (error) {
         report.errors.push(`${source.name} fast-pass: ${error}`);
-        await convex.mutation(api.dailyScanCost.recordCost, {
+        await withConvexRetry(() =>
+          convex.mutation(api.dailyScanCost.recordCost, {
+            date,
+            source: source.name,
+            costUsd: 0,
+            scanAttempted: true,
+            scanSucceeded: false,
+          }),
+        );
+        continue;
+      }
+      await withConvexRetry(() =>
+        convex.mutation(api.dailyScanCost.recordCost, {
           date,
           source: source.name,
           costUsd: 0,
           scanAttempted: true,
-          scanSucceeded: false,
-        });
-        continue;
-      }
-      await convex.mutation(api.dailyScanCost.recordCost, {
-        date,
-        source: source.name,
-        costUsd: 0,
-        scanAttempted: true,
-        scanSucceeded: true,
-      });
+          scanSucceeded: true,
+        }),
+      );
       report.itemsScanned += items.length;
       for (const item of items) {
         const matches = keywordHits(`${item.title} ${item.excerpt ?? ""}`, keywords);
@@ -515,13 +525,24 @@ export async function runMorningScan(): Promise<ScanReport> {
     const message = err instanceof Error ? err.message : String(err);
     report.errors.push(message);
     report.elapsedMs = Date.now() - started;
-    await convex.mutation(api.scanRuns.update, {
-      runId,
-      status: "failed",
-      error: message,
-      elapsedMs: report.elapsedMs,
-      itemsScanned: report.itemsScanned,
-    });
+    // Mark the run failed - never leave it orphaned at "running". Retry this
+    // mutation too: if the failure WAS a cold deployment, an un-retried update
+    // here would throw straight back out and re-orphan the very run we are
+    // trying to close. If it still can't be written, log and move on - we are
+    // already on the failure path and must not propagate.
+    try {
+      await withConvexRetry(() =>
+        convex.mutation(api.scanRuns.update, {
+          runId,
+          status: "failed",
+          error: message,
+          elapsedMs: report.elapsedMs,
+          itemsScanned: report.itemsScanned,
+        }),
+      );
+    } catch (updateErr) {
+      console.error(`[morning-scan] failed to mark run failed: ${String(updateErr)}`);
+    }
     await appendAuditLog(buildAuditEntry(report, candidates));
     return report;
   }
