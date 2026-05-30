@@ -77,6 +77,22 @@ When Charlie named a weekday, pass statedWeekday. A deterministic guard rejects 
         const check = checkReminderDate(dueISO, statedWeekday);
         if (!check.ok) return runtimeText(check.reason, false);
 
+        // Resolve the list name against the ACTUAL stored lists, tolerant to
+        // curly/straight apostrophes and whitespace, so the draft shows (and the
+        // write targets) the real name. iOS stores e.g. "Charlie<U+2019>s
+        // Personal Tasks"; a straight-apostrophe target fails the osascript
+        // lookup (-1728). Best-effort here; the writer resolves authoritatively.
+        let resolvedList = list;
+        try {
+          const r = await readReminders();
+          const norm = (s: string) => s.replace(/[‘’]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+          const want = norm(list);
+          const match = [...new Set(r.reminders.map((x) => x.list))].find((n) => norm(n) === want);
+          if (match) resolvedList = match;
+        } catch {
+          /* fall back to the requested name; the writer still resolves it */
+        }
+
         const actionId = randomId("pa");
         const now = Date.now();
         await convex.mutation(api.pendingActions.create, {
@@ -84,14 +100,14 @@ When Charlie named a weekday, pass statedWeekday. A deterministic guard rejects 
           conversationId,
           kind: "reminder.add",
           pitch: "",
-          entry: JSON.stringify({ title, dueISO, list, amount: amount ?? null }),
+          entry: JSON.stringify({ title, dueISO, list: resolvedList, amount: amount ?? null }),
           targetFile: "",
           sha256: "",
           createdAt: now,
           expiresAt: now + 30 * 60 * 1000,
         });
         return runtimeText(
-          `Staged reminder. Show Charlie this exact draft and ask for a yes:\n  Add: ${title}${amount ? ` (${amount})` : ""}\n  Due: ${humanDate(dueISO)}\n  List: ${list}\nThen end with: Reply "yes" to add it (anything else cancels). Do NOT claim it's added; the write happens only on his yes.`,
+          `Staged reminder. Show Charlie this exact draft and ask for a yes:\n  Add: ${title}${amount ? ` (${amount})` : ""}\n  Due: ${humanDate(dueISO)}\n  List: ${resolvedList}\nThen end with: Reply "yes" to add it (anything else cancels). Do NOT claim it's added; the write happens only on his yes.`,
         );
       },
     ),

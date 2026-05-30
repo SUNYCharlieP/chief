@@ -31,6 +31,34 @@ function asEscape(s) {
   return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+// Normalize a list name for tolerant matching: curly apostrophes -> straight,
+// collapse whitespace, lowercase. This is the root-cause fix: iOS stores list
+// names with a curly apostrophe (U+2019) but Chief may stage a straight one
+// (U+0027), and an exact osascript lookup then fails with -1728.
+function normList(s) {
+  return String(s).replace(/[‘’]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+// All list names from the live store (includes empty lists, unlike the snapshot).
+async function getListNames() {
+  const script = [
+    'tell application "Reminders" to set ll to name of every list',
+    "set text item delimiters to linefeed",
+    "return ll as text",
+  ].join("\n");
+  const out = await run("/usr/bin/osascript", ["-e", script]);
+  return out
+    .toString()
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function resolveList(requested, actualNames) {
+  const want = normList(requested);
+  return actualNames.find((n) => normList(n) === want) ?? null;
+}
+
 function run(bin, args, opts = {}) {
   return new Promise((res, rej) => {
     execFile(bin, args, { timeout: 30000, maxBuffer: 8 * 1024 * 1024, ...opts }, (err, stdout, stderr) => {
@@ -40,12 +68,15 @@ function run(bin, args, opts = {}) {
   });
 }
 
-function buildAppleScript({ title, dueISO, list }) {
+function buildAppleScript({ title, dueISO, list, requestId }) {
   const m = dueISO.match(/(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
   if (!m) return null;
   const [, y, mo, d, h, min] = m;
   const hh = h ?? "09";
   const mm = min ?? "00";
+  // Stamp the requestId into the reminder body so the Chief side can confirm
+  // THIS specific write landed (not just that some same-title reminder exists).
+  const marker = `chief-req:${requestId}`;
   // Build the date from components (locale/TZ-proof). day=1 first avoids
   // month-length overflow when changing month/year.
   return [
@@ -59,7 +90,7 @@ function buildAppleScript({ title, dueISO, list }) {
     `set minutes of theDate to ${Number(mm)}`,
     'tell application "Reminders"',
     `  tell list "${asEscape(list)}"`,
-    `    make new reminder with properties {name:"${asEscape(title)}", due date:theDate}`,
+    `    make new reminder with properties {name:"${asEscape(title)}", due date:theDate, body:"${asEscape(marker)}"}`,
     "  end tell",
     "end tell",
   ].join("\n");
@@ -86,7 +117,29 @@ async function processRequest(file) {
     await unlink(path).catch(() => {});
     return;
   }
-  const script = buildAppleScript(req);
+  // Resolve the requested list against ACTUAL store list names (apostrophe- and
+  // whitespace-tolerant). If it still doesn't exist, fail LOUDLY with the
+  // available lists, never a soft success.
+  let actualLists;
+  try {
+    actualLists = await getListNames();
+  } catch (err) {
+    const msg = String(err);
+    const perm = /-1743|not authorized|assistive|automation/i.test(msg);
+    await log(`FAILED to list Reminders lists for "${req.title}": ${msg}${perm ? "  <- Automation/Reminders grant missing" : ""}`);
+    await unlink(path).catch(() => {});
+    return;
+  }
+  const resolvedList = resolveList(req.list, actualLists);
+  if (!resolvedList) {
+    await log(
+      `FAILED to add "${req.title}": no list named "${req.list}"; available: ${actualLists.map((n) => `"${n}"`).join(", ")}`,
+    );
+    await unlink(path).catch(() => {});
+    return; // do not re-snapshot; nothing changed
+  }
+
+  const script = buildAppleScript({ ...req, list: resolvedList });
   if (!script) {
     await log(`unparseable dueISO ${req.dueISO} in ${file}, deleting`);
     await unlink(path).catch(() => {});
@@ -94,7 +147,7 @@ async function processRequest(file) {
   }
   try {
     await run("/usr/bin/osascript", ["-e", script]);
-    await log(`added "${req.title}" to list "${req.list}" due ${req.dueISO}`);
+    await log(`added "${req.title}" to list "${resolvedList}" due ${req.dueISO} (req ${req.requestId})`);
   } catch (err) {
     const msg = String(err);
     const perm = /-1743|not authorized|Not authorized|assistive|automation/i.test(msg);

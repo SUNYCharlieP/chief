@@ -96,17 +96,23 @@ export async function submitReminderAdd(req: ReminderAddRequest): Promise<AddRes
   await writeFile(tmp, payload, "utf8");
   await rename(tmp, finalPath);
 
-  const confirmed = await pollSnapshot(req.title, req.list);
+  const confirmed = await pollSnapshot(requestId);
   return { confirmed, requestId, due: humanDate(req.dueISO) };
 }
 
-async function pollSnapshot(title: string, list: string): Promise<boolean> {
+// Confirm THIS specific write landed by matching the requestId the writer
+// stamped into the new reminder's notes. Matching on title+list would
+// false-confirm against a PRE-EXISTING reminder with the same title (e.g. a
+// recurring "Pay X" already in Bills) even when this write failed. Identity,
+// not a fuzzy proxy.
+async function pollSnapshot(requestId: string): Promise<boolean> {
+  const marker = `chief-req:${requestId}`;
   for (let i = 0; i < POLL_TRIES; i++) {
     try {
       const snap = JSON.parse(await readFile(SNAPSHOT, "utf8")) as {
-        reminders?: Array<{ title: string; list: string }>;
+        reminders?: Array<{ notes?: string | null }>;
       };
-      if ((snap.reminders ?? []).some((r) => r.title === title && r.list === list)) return true;
+      if ((snap.reminders ?? []).some((r) => (r.notes ?? "").includes(marker))) return true;
     } catch {
       /* snapshot not ready; retry */
     }

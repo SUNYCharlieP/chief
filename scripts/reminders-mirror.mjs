@@ -55,7 +55,7 @@ async function main() {
       const rows = db
         .prepare(
           `SELECT r.ZTITLE AS title, r.ZDUEDATE AS due, r.ZALLDAY AS allday,
-                  r.ZCOMPLETED AS completed, l.ZNAME AS list
+                  r.ZCOMPLETED AS completed, l.ZNAME AS list, r.ZNOTES AS notes
            FROM ZREMCDREMINDER r
            LEFT JOIN ZREMCDBASELIST l ON r.ZLIST = l.Z_PK
            WHERE r.ZCOMPLETED = 0 AND r.ZTITLE IS NOT NULL`,
@@ -69,6 +69,7 @@ async function main() {
           allDay: Boolean(row.allday),
           completed: Boolean(row.completed),
           list: row.list ?? "(no list)",
+          notes: row.notes ?? null,
           store: f,
         });
       }

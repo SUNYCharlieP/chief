@@ -162,9 +162,13 @@ export async function handlePendingActionReply(
         return { handled: true, reply: "That reminder draft was malformed; nothing was added." };
       }
       const res = await submitReminderAdd(req);
+      // Honesty: success is reported ONLY when the requestId-stamped reminder is
+      // verified in the refreshed snapshot. Otherwise say plainly that it could
+      // not be confirmed, and do NOT guess the cause (the old message wrongly
+      // blamed permissions when the real cause was a list-name mismatch).
       const reply = res.confirmed
         ? `Added to ${req.list}, due ${res.due}.`
-        : `Submitted to add "${req.title}" to ${req.list} (due ${res.due}). It'll show on the next snapshot refresh; if it doesn't, the writer agent or its Reminders permission may need a look.`;
+        : `Submitted, but I could NOT confirm "${req.title}" landed in ${req.list}. Do not count on it.`;
       return { handled: true, reply };
     }
     await convex.mutation(api.pendingActions.setStatus, {
