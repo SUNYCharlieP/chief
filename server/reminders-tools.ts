@@ -60,14 +60,40 @@ export function createReminderTools(conversationId: string): RuntimeTool[] {
 - If the due date was vague ("this week", "soon"), you must have already asked Charlie to pin it or proposed a specific date and gotten his date.
 - If the list was ambiguous, you must have already asked. Infer "Bills" when there's an amount/payee, "Charlie's Personal Tasks" for a clear task; only ask when genuinely unclear. Use an EXISTING list name.
 - Resolve relative dates ("Friday", "the 10th", "tomorrow") against today's date into a full ISO date. ALWAYS show the resolved ABSOLUTE date to Charlie in the draft, never the relative phrase.
-After this returns, show the draft and ask for a yes. The write happens only on his explicit confirm.`,
+When Charlie named a weekday, pass statedWeekday. A deterministic guard rejects any due date that is in the past or doesn't match the stated weekday and asks you to recompute (carefully against today's full date, including the year) before any draft is shown; fix the date and call again. After it returns the draft, show it and ask for a yes. The write happens only on his explicit confirm.`,
       {
         title: z.string().describe("Reminder title, e.g. \"Pay Xfinity $150\"."),
         dueISO: z.string().describe("Absolute due date ISO8601, computed against today (e.g. 2026-05-30T09:00:00)."),
         list: z.string().describe('Existing list name, e.g. "Bills" or "Charlie’s Personal Tasks".'),
         amount: z.string().optional().describe('Dollar amount if it\'s a payment, e.g. "$150".'),
+        statedWeekday: z
+          .string()
+          .optional()
+          .describe('If Charlie named a weekday ("Friday", "next Tuesday"), pass that weekday here so the date is verified against it.'),
       },
-      async ({ title, dueISO, list, amount }) => {
+      async ({ title, dueISO, list, amount, statedWeekday }) => {
+        // DETERMINISTIC DATE GUARD (em-dash-strip philosophy: enforce in code,
+        // don't trust the model's date math). Runs before any draft is shown;
+        // a rejection makes the model recompute and call again.
+        const m = dueISO.match(/(\d{4})-(\d{2})-(\d{2})/);
+        if (!m) {
+          return runtimeText(`dueISO "${dueISO}" is not a full YYYY-MM-DD date. Recompute the absolute date against today and call stage_reminder again.`, false);
+        }
+        const dueLocal = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])); // local midnight
+        const now = new Date();
+        const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const fmt = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+        if (dueLocal.getTime() < todayLocal.getTime()) {
+          return runtimeText(`Rejected: ${fmt(dueLocal)} is in the PAST (today is ${fmt(todayLocal)}). A reminder is never for a past date. Recompute the absolute date against today (mind the YEAR) and call stage_reminder again.`, false);
+        }
+        if (statedWeekday) {
+          const names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+          const statedIdx = names.indexOf(statedWeekday.trim().toLowerCase());
+          if (statedIdx >= 0 && statedIdx !== dueLocal.getDay()) {
+            return runtimeText(`Rejected: ${fmt(dueLocal)} is a ${names[dueLocal.getDay()]}, but Charlie said "${statedWeekday}". Today is ${fmt(todayLocal)}. Recompute the correct ${statedWeekday} date and call again.`, false);
+          }
+        }
+
         const actionId = randomId("pa");
         const now = Date.now();
         await convex.mutation(api.pendingActions.create, {
