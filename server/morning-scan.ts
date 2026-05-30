@@ -51,6 +51,24 @@ function randomId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Retry a Convex call ONLY on a transient WorkerOverloaded (a fast reject, not a
+// hang), with exponential backoff. Any other error throws immediately. This
+// survives the morning cold-start window where the dev deployment briefly has no
+// workers after the Mac's overnight sleep.
+export async function withConvexRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!/WorkerOverloaded|no available workers/i.test(String(err))) throw err;
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, 1000 * 2 ** i)); // 1s, 2s
+    }
+  }
+  throw lastErr;
+}
+
 function todayLocalDate(timezone: string): string {
   // en-CA gives YYYY-MM-DD which sorts correctly and is unambiguous.
   return new Date().toLocaleDateString("en-CA", { timeZone: timezone });
@@ -535,27 +553,37 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
     return { runId, sentTo: null, bodyChars: 0, source: "scan-missing", elapsedMs: 0, error };
   }
 
-  const latest = await convex.query(api.scanRuns.latestCompletedScan, {});
-  let body: string;
+  let body = "";
   let source: SurfaceReport["source"];
-
   // Candidates to mark surfaced ONLY after a confirmed send (not before, so a
   // dropped send doesn't permanently suppress today's items).
   let surfaceCandidateIds: string[] = [];
-  if (latest && latest.formattedCheckIn && latest.formattedCheckIn.trim().length > 0) {
-    body = latest.formattedCheckIn.trim();
-    source = "scan-formatted";
-    const cands = await convex.query(api.scanCandidates.topNominatedForRun, {
-      scanRunId: latest.runId,
-      limit: 3,
-    });
-    surfaceCandidateIds = cands.map((c) => c.candidateId);
-  } else if (latest) {
-    body = "no items today";
-    source = "no-items";
-  } else {
-    body = "no items today";
+  // If the early Convex reads fail (cold dev deployment in the morning sleep
+  // window), DEGRADE rather than vanish: skip the tech check-in and still send
+  // the snapshot-only briefing (date/weather/reminders need no Convex). The run
+  // is then marked failed, not orphaned at "running".
+  let degradedError: string | null = null;
+  try {
+    const latest = await withConvexRetry(() => convex.query(api.scanRuns.latestCompletedScan, {}));
+    if (latest && latest.formattedCheckIn && latest.formattedCheckIn.trim().length > 0) {
+      body = latest.formattedCheckIn.trim();
+      source = "scan-formatted";
+      const cands = await withConvexRetry(() =>
+        convex.query(api.scanCandidates.topNominatedForRun, { scanRunId: latest.runId, limit: 3 }),
+      );
+      surfaceCandidateIds = cands.map((c) => c.candidateId);
+    } else if (latest) {
+      body = "no items today";
+      source = "no-items";
+    } else {
+      body = "no items today";
+      source = "scan-missing";
+    }
+  } catch (err) {
+    degradedError = String(err);
     source = "scan-missing";
+    body = ""; // no tech check-in; the briefing below carries the morning
+    console.error(`[morning-surface] early Convex read failed, degrading to briefing-only: ${degradedError}`);
   }
 
   // Fold in the YouTube proactive line (at most one), if the day's top held
@@ -579,10 +607,20 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
   try {
     const briefing = await buildBriefing();
     if (briefing && briefing.trim().length > 0) {
-      body = `${briefing}\n\n${body}`;
+      body = body.trim().length > 0 ? `${briefing}\n\n${body}` : briefing;
     }
   } catch (err) {
     console.warn(`[morning-surface] briefing failed: ${String(err)}`);
+  }
+
+  // If both the tech check-in (Convex) and the briefing (snapshots) produced
+  // nothing, there is nothing to send. Mark failed instead of sending an empty
+  // message or orphaning the run.
+  if (body.trim().length === 0) {
+    const elapsed = Date.now() - started;
+    const error = degradedError ?? "surface produced no body";
+    await convex.mutation(api.scanRuns.update, { runId, status: "failed", error, elapsedMs: elapsed });
+    return { runId, sentTo: contact, bodyChars: 0, source, elapsedMs: elapsed, error };
   }
 
   let sent = false;
@@ -630,16 +668,27 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
   });
 
   const elapsed = Date.now() - started;
+  // If we degraded (tech check-in failed but the briefing was sent), record the
+  // run as failed WITH the error, not completed - the surface did not fully
+  // succeed, but the briefing still reached Charlie.
   await convex.mutation(api.scanRuns.update, {
     runId,
-    status: "completed",
+    status: degradedError ? "failed" : "completed",
+    error: degradedError ?? undefined,
     elapsedMs: elapsed,
     surfaceLog: body,
   });
   await appendAuditLog(
     buildSurfaceAuditEntry({ runId, sentTo: contact, body, source, elapsed }),
   );
-  return { runId, sentTo: contact, bodyChars: body.length, source, elapsedMs: elapsed };
+  return {
+    runId,
+    sentTo: contact,
+    bodyChars: body.length,
+    source,
+    elapsedMs: elapsed,
+    error: degradedError ?? undefined,
+  };
 }
 
 function buildAuditEntry(report: ScanReport, candidates: ScoredCandidate[]): string {
