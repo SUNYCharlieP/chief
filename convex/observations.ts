@@ -39,6 +39,21 @@ export const recordIfNew = mutation({
   },
 });
 
+// Maintenance: delete a single observation by dedupKey. Used to remove a
+// spurious observation (e.g. one folded in under an oversized backfill window).
+export const deleteByDedupKey = mutation({
+  args: { dedupKey: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("observations")
+      .withIndex("by_dedup_key", (q) => q.eq("dedupKey", args.dedupKey))
+      .unique();
+    if (!row) return { deleted: false };
+    await ctx.db.delete(row._id);
+    return { deleted: true };
+  },
+});
+
 export const recent = query({
   args: {
     sinceMs: v.optional(v.number()),

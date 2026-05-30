@@ -100,24 +100,30 @@ export function shaKey(sha: string): string {
 }
 
 // Rolled-up push: ONE observation per push batch (keyed by head sha), never one
-// per commit. Suppressed when ANY commit in the batch is already a local
-// git-commit observation (matched by SHA, name-independent), so we never
-// duplicate the local commit stream even when the local folder name differs
-// from the GitHub repo name (Arca -> Arca-iOS-, ProFloor -> Profloor-V2).
+// per commit. Suppressed by NAME-OR-SHA so we never duplicate the local commit
+// stream, with neither hole:
+//   - NAME: the repo is locally tracked (its folder is a git-commit source), so
+//     the local stream covers it window-independently (closes the 2-day local
+//     vs wider-github-window timing race).
+//   - SHA: any pushed commit is already a local git-commit observation, which is
+//     name-independent and so holds when the local folder name differs from the
+//     GitHub repo name (Arca -> Arca-iOS-, ProFloor -> Profloor-V2).
+// Either signal suppresses; it is a superset, so coverage is never missed.
 export function mapPushRollup(
   repoFull: string,
   branch: string,
   commits: Array<Record<string, unknown>>,
   localShas: Set<string>,
+  localSources: Set<string>,
 ): ObservationArgs | null {
   if (commits.length === 0) return null;
-  // SHA-based suppression: if any pushed commit is locally observed, the local
-  // git-commit stream already covers this repo. Suppress the whole rollup.
-  const covered = commits.some((c) => {
+  const repoName = repoFull.split("/").pop() ?? repoFull;
+  const nameCovered = localSources.has(repoName);
+  const shaCovered = commits.some((c) => {
     const s = typeof c.sha === "string" ? c.sha : "";
     return s !== "" && localShas.has(shaKey(s));
   });
-  if (covered) return null;
+  if (nameCovered || shaCovered) return null;
   const head = commits[0];
   const sha = typeof head.sha === "string" ? head.sha : "";
   if (!sha) return null;
@@ -215,9 +221,14 @@ export async function runGithubObserver(): Promise<GithubObserveReport> {
   // SHA (not repo name) is name-independent, so it holds even when the local
   // folder name differs from the GitHub repo name. The git observer stores the
   // full sha in detail ({sha,...}); fall back to the dedupKey tail (git:repo:sha).
+  // We also keep the set of local git-commit SOURCES (repo folder names) so a
+  // locally-tracked repo is suppressed by NAME regardless of which specific
+  // commits the local observer has recorded (window-independent).
   const localObs = await convex.query(api.observations.recent, { kind: "git-commit", limit: 500 });
   const localShas = new Set<string>();
-  for (const o of localObs as Array<{ detail?: string; dedupKey?: string }>) {
+  const localSources = new Set<string>();
+  for (const o of localObs as Array<{ source?: string; detail?: string; dedupKey?: string }>) {
+    if (o.source) localSources.add(o.source);
     let sha = "";
     try {
       sha = (JSON.parse(o.detail ?? "{}") as { sha?: string }).sha ?? "";
@@ -303,7 +314,7 @@ export async function runGithubObserver(): Promise<GithubObserveReport> {
     // suppression); mapPushRollup suppresses by SHA if any is locally covered.
     const com = await gh.get(`/repos/${full}/commits?since=${encodeURIComponent(sinceIso)}&per_page=10`);
     if (com.ok && Array.isArray(com.json)) {
-      await record(mapPushRollup(full, branch, com.json as Array<Record<string, unknown>>, localShas));
+      await record(mapPushRollup(full, branch, com.json as Array<Record<string, unknown>>, localShas, localSources));
     } else if (!com.ok && com.status !== 404 && com.status !== 409) {
       report.errors.push(`${full} commits: HTTP ${com.status}`); // 409 = empty repo
     }
