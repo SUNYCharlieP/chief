@@ -93,16 +93,31 @@ export function mapRelease(repoFull: string, rel: Record<string, unknown>): Obse
   };
 }
 
+// Normalize a sha for matching (lowercase, first 12 chars) so full and
+// abbreviated shas compare equal regardless of source.
+export function shaKey(sha: string): string {
+  return sha.toLowerCase().slice(0, 12);
+}
+
 // Rolled-up push: ONE observation per push batch (keyed by head sha), never one
-// per commit. Suppressed when the repo already has local git-commit coverage,
-// so we never duplicate the local commit stream.
+// per commit. Suppressed when ANY commit in the batch is already a local
+// git-commit observation (matched by SHA, name-independent), so we never
+// duplicate the local commit stream even when the local folder name differs
+// from the GitHub repo name (Arca -> Arca-iOS-, ProFloor -> Profloor-V2).
 export function mapPushRollup(
   repoFull: string,
   branch: string,
   commits: Array<Record<string, unknown>>,
-  locallyCovered: boolean,
+  localShas: Set<string>,
 ): ObservationArgs | null {
-  if (locallyCovered || commits.length === 0) return null;
+  if (commits.length === 0) return null;
+  // SHA-based suppression: if any pushed commit is locally observed, the local
+  // git-commit stream already covers this repo. Suppress the whole rollup.
+  const covered = commits.some((c) => {
+    const s = typeof c.sha === "string" ? c.sha : "";
+    return s !== "" && localShas.has(shaKey(s));
+  });
+  if (covered) return null;
   const head = commits[0];
   const sha = typeof head.sha === "string" ? head.sha : "";
   if (!sha) return null;
@@ -196,9 +211,22 @@ export async function runGithubObserver(): Promise<GithubObserveReport> {
   const lastCheck = stored ? Number(stored) : Date.now() - FIRST_LOOKBACK_DAYS * 86400000;
   const sinceIso = new Date(lastCheck).toISOString();
 
-  // Repos for the push-suppression set: local git-commit sources (folder names).
-  const localObs = await convex.query(api.observations.recent, { kind: "git-commit", limit: 200 });
-  const localRepoNames = new Set<string>(localObs.map((o: { source: string }) => o.source));
+  // Push-suppression set: SHAs of local git-commit observations. Matching on
+  // SHA (not repo name) is name-independent, so it holds even when the local
+  // folder name differs from the GitHub repo name. The git observer stores the
+  // full sha in detail ({sha,...}); fall back to the dedupKey tail (git:repo:sha).
+  const localObs = await convex.query(api.observations.recent, { kind: "git-commit", limit: 500 });
+  const localShas = new Set<string>();
+  for (const o of localObs as Array<{ detail?: string; dedupKey?: string }>) {
+    let sha = "";
+    try {
+      sha = (JSON.parse(o.detail ?? "{}") as { sha?: string }).sha ?? "";
+    } catch {
+      /* fall through to dedupKey */
+    }
+    if (!sha && o.dedupKey) sha = o.dedupKey.split(":").pop() ?? "";
+    if (sha) localShas.add(shaKey(sha));
+  }
 
   // List repos (paginated, most-recently-pushed first), filter to active ones.
   const repos: Array<Record<string, unknown>> = [];
@@ -246,7 +274,6 @@ export async function runGithubObserver(): Promise<GithubObserveReport> {
       break;
     }
     const full = typeof repo.full_name === "string" ? repo.full_name : "";
-    const name = typeof repo.name === "string" ? repo.name : "";
     const branch = typeof repo.default_branch === "string" ? repo.default_branch : "main";
     if (!full) continue;
     report.reposProcessed += 1;
@@ -272,15 +299,13 @@ export async function runGithubObserver(): Promise<GithubObserveReport> {
       report.errors.push(`${full} releases: HTTP ${rel.status}`);
     }
 
-    // Rolled-up push (suppressed where local git-commit already covers).
-    const locallyCovered = localRepoNames.has(name);
-    if (!locallyCovered) {
-      const com = await gh.get(`/repos/${full}/commits?since=${encodeURIComponent(sinceIso)}&per_page=10`);
-      if (com.ok && Array.isArray(com.json)) {
-        await record(mapPushRollup(full, branch, com.json as Array<Record<string, unknown>>, false));
-      } else if (!com.ok && com.status !== 404 && com.status !== 409) {
-        report.errors.push(`${full} commits: HTTP ${com.status}`); // 409 = empty repo
-      }
+    // Rolled-up push. Always fetch commits (we need their SHAs to decide
+    // suppression); mapPushRollup suppresses by SHA if any is locally covered.
+    const com = await gh.get(`/repos/${full}/commits?since=${encodeURIComponent(sinceIso)}&per_page=10`);
+    if (com.ok && Array.isArray(com.json)) {
+      await record(mapPushRollup(full, branch, com.json as Array<Record<string, unknown>>, localShas));
+    } else if (!com.ok && com.status !== 404 && com.status !== 409) {
+      report.errors.push(`${full} commits: HTTP ${com.status}`); // 409 = empty repo
     }
   }
 
