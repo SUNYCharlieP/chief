@@ -10,6 +10,7 @@ import { startMorningScan, stopMorningScan, runMorningScan, runMorningSurface } 
 import { startProactiveEngagement, runProactiveCheck } from "./proactive-engagement.js";
 import { startGitObserver, stopGitObserver, runGitObserver } from "./git-observer.js";
 import { startLinearObserver, stopLinearObserver, runLinearObserver } from "./linear-observer.js";
+import { startGithubObserver, runGithubObserver } from "./github-observer.js";
 import { linearStatusProbe } from "./integrations/linear.js";
 import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
 import {
@@ -227,6 +228,15 @@ async function main() {
     }
   });
 
+  // Read-only GitHub observer: fold remote issues/PRs/releases/push into the log.
+  app.post("/observe/github/run", async (_req, res) => {
+    try {
+      res.json(await runGithubObserver());
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // Build-time verification: is Linear connected, what action slugs resolved,
   // and a raw sample so we can confirm shapes before testing.
   app.get("/linear/status", async (_req, res) => {
@@ -375,6 +385,8 @@ async function main() {
   startGitObserver();
 
   startLinearObserver();
+
+  startGithubObserver();
 
   startSkillDigest().catch((err) =>
     console.error("[skill-digest] scheduler failed to start", err),

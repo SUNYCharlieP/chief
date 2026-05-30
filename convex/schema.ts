@@ -300,6 +300,10 @@ export default defineSchema({
       v.literal("competes-flag"),
       v.literal("self-report"),
       v.literal("linear-ticket"),
+      v.literal("github-issue"),
+      v.literal("github-pr"),
+      v.literal("github-release"),
+      v.literal("github-push"),
     ),
     source: v.string(), // repo name, "morning-scan", etc.
     summary: v.string(),

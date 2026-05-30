@@ -23,7 +23,16 @@ export function createObservationTools(): RuntimeTool[] {
           .optional()
           .describe("Only return activity from the last N hours. Omit for the default 7-day window."),
         kind: z
-          .enum(["git-commit", "competes-flag", "self-report", "linear-ticket"])
+          .enum([
+            "git-commit",
+            "competes-flag",
+            "self-report",
+            "linear-ticket",
+            "github-issue",
+            "github-pr",
+            "github-release",
+            "github-push",
+          ])
           .optional()
           .describe("Filter to one observation kind. Omit for all kinds."),
         limit: z.number().int().positive().max(200).optional().describe("Max items (default 60)."),
