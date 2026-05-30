@@ -351,7 +351,11 @@ export default defineSchema({
   pendingActions: defineTable({
     actionId: v.string(),
     conversationId: v.string(),
-    kind: v.union(v.literal("skills.append"), v.literal("youtube.brainstorm")),
+    kind: v.union(
+      v.literal("skills.append"),
+      v.literal("youtube.brainstorm"),
+      v.literal("reminder.add"),
+    ),
     status: v.union(
       v.literal("pending"),
       v.literal("committed"),

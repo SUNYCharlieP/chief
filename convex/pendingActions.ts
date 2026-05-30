@@ -14,7 +14,11 @@ export const create = mutation({
   args: {
     actionId: v.string(),
     conversationId: v.string(),
-    kind: v.union(v.literal("skills.append"), v.literal("youtube.brainstorm")),
+    kind: v.union(
+      v.literal("skills.append"),
+      v.literal("youtube.brainstorm"),
+      v.literal("reminder.add"),
+    ),
     pitch: v.string(),
     entry: v.string(),
     targetFile: v.string(),

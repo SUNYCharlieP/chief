@@ -5,6 +5,7 @@ import { defineRuntimeTool } from "./runtimes/tool.js";
 import { runtimeText, type RuntimeTool } from "./runtimes/types.js";
 import { appendSkillEntry, sha256 } from "./brain-write.js";
 import { runBrainstormOpening } from "./youtube-analyze.js";
+import { submitReminderAdd } from "./reminders-write.js";
 
 // Stage A draft-and-ask: on-demand Skills.md candidate drafting.
 //
@@ -146,6 +147,32 @@ export async function handlePendingActionReply(
   if (!active) return { handled: false };
 
   const norm = normalize(content);
+
+  // Reminders add gate: write ONLY on a whole-message affirmative; else discard.
+  if (active.kind === "reminder.add") {
+    if (AFFIRMATIVES.has(norm)) {
+      await convex.mutation(api.pendingActions.setStatus, {
+        actionId: active.actionId,
+        status: "committed",
+      });
+      let req: { title: string; dueISO: string; list: string; amount?: string | null };
+      try {
+        req = JSON.parse(active.entry);
+      } catch {
+        return { handled: true, reply: "That reminder draft was malformed; nothing was added." };
+      }
+      const res = await submitReminderAdd(req);
+      const reply = res.confirmed
+        ? `Added to ${req.list}, due ${res.due}.`
+        : `Submitted to add "${req.title}" to ${req.list} (due ${res.due}). It'll show on the next snapshot refresh; if it doesn't, the writer agent or its Reminders permission may need a look.`;
+      return { handled: true, reply };
+    }
+    await convex.mutation(api.pendingActions.setStatus, {
+      actionId: active.actionId,
+      status: "rejected",
+    });
+    return { handled: false };
+  }
 
   // YouTube heavy stage gate: brainstorm runs ONLY on a whole-message
   // affirmative; anything else discards. Deterministic, no model discretion.

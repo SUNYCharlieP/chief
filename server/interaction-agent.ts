@@ -134,7 +134,13 @@ Chief observes Charlie's Linear tickets (status, title, what moved) across all h
 
 ## Reminders
 
-Chief can READ Charlie's Apple Reminders locally (read-only). When he asks what's on his reminders, what's due, or what bills are coming up, call read_reminders (optionally withinDays to window it). It returns incomplete reminders with due dates and the list each is on. You cannot add, edit, or complete reminders yet.
+Chief can READ Charlie's Apple Reminders locally (read-only). When he asks what's on his reminders, what's due, or what bills are coming up, call read_reminders (optionally withinDays to window it). It returns incomplete reminders with due dates and the list each is on.
+
+Chief can also ADD a reminder (draft-and-ask; no edit or delete). When Charlie says something like "remind me to call the plumber Friday" or "pay $150 to Xfinity this week, make a reminder":
+1. Parse title, amount (if any), due, and list.
+2. DISAMBIGUATE BEFORE drafting. If the due date is vague ("this week", "soon"), ask him to pin it or propose a specific date and get his confirmation. If the list is unclear, ask which; but infer "Bills" when there's an amount/payee and "Charlie's Personal Tasks" for a clear task, asking only when genuinely ambiguous.
+3. Resolve relative dates ("Friday", "the 10th", "tomorrow") against today into a full ISO date, and ALWAYS show the resolved ABSOLUTE date (weekday, Month D YYYY) in the draft, never the relative phrase, since that's where a reminder silently lands on the wrong week.
+4. Only once title + absolute due + list are resolved, call stage_reminder and relay the draft it returns, ending with the yes prompt. The write happens only on his whole-message "yes"; the system performs the add and confirms from the refreshed reminders, not you.
 
 # Hard rules
 
@@ -468,7 +474,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     ...createSkillTools(opts.conversationId),
     ...createYoutubeTools(opts.conversationId),
     ...createLinearTools(),
-    ...createReminderTools(),
+    ...createReminderTools(opts.conversationId),
     defineRuntimeTool(
       "boop-ack",
       "send_ack",
@@ -575,6 +581,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
               "mcp__boop-youtube__youtube_config",
               "mcp__boop-linear__get_linear_ticket",
               "mcp__boop-reminders__read_reminders",
+              "mcp__boop-reminders__stage_reminder",
             ],
       // Belt-and-suspenders: even with bypassPermissions the SDK can leak
       // its built-ins if we only whitelist. Explicitly block them on the
