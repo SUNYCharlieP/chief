@@ -51,10 +51,14 @@ function randomId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// Retry a Convex call ONLY on a transient WorkerOverloaded (a fast reject, not a
-// hang), with exponential backoff. Any other error throws immediately. This
-// survives the morning cold-start window where the dev deployment briefly has no
-// workers after the Mac's overnight sleep.
+// Retry a Convex call ONLY on a transient, retry-safe backend error, with
+// exponential backoff. Any other error (validation, not-found, app logic) throws
+// immediately. This survives the morning cold-start window where the dev
+// deployment is flaky after the Mac's overnight sleep: it throws BOTH
+// WorkerOverloaded (no workers yet) AND InternalServerError "try again later"
+// (the deployment waking up), so the allowlist covers that whole transient class.
+const TRANSIENT_CONVEX =
+  /WorkerOverloaded|no available workers|InternalServerError|try again later/i;
 export async function withConvexRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
   let lastErr: unknown;
   for (let i = 0; i < tries; i++) {
@@ -62,7 +66,7 @@ export async function withConvexRetry<T>(fn: () => Promise<T>, tries = 3): Promi
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (!/WorkerOverloaded|no available workers/i.test(String(err))) throw err;
+      if (!TRANSIENT_CONVEX.test(String(err))) throw err;
       if (i < tries - 1) await new Promise((r) => setTimeout(r, 1000 * 2 ** i)); // 1s, 2s
     }
   }
