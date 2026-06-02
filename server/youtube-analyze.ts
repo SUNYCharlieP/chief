@@ -98,6 +98,9 @@ export async function analyzeVideo(conversationId: string, ref: string): Promise
   }
 
   const title = data?.title || v.title || v.videoId;
+  // Prefer the channel yt-dlp reports (covers pasted URLs that were never in the
+  // discover pool, where v.channelTitle is empty); fall back to the pool row.
+  const channelTitle = data?.channel || v.channelTitle || "";
   let transcriptStatus: "full" | "partial" | "none";
   let transcript = "";
   let confidence: "high" | "low";
@@ -125,7 +128,7 @@ export async function analyzeVideo(conversationId: string, ref: string): Promise
   await convex.mutation(api.youtubeAnalysis.upsert, {
     videoId: v.videoId,
     title,
-    channelTitle: v.channelTitle,
+    channelTitle,
     url: v.url,
     transcriptStatus,
     transcript,

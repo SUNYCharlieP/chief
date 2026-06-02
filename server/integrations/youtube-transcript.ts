@@ -17,6 +17,7 @@ const TIMEOUT_MS = 60_000;
 
 export interface VideoData {
   title: string;
+  channel: string;
   description: string;
   chapters: string[];
   transcriptStatus: "full" | "none";
@@ -96,6 +97,14 @@ export async function fetchVideoData(url: string): Promise<VideoData> {
       /* metadata parse optional */
     }
     const title = typeof meta.title === "string" ? meta.title : "";
+    // yt-dlp exposes the channel name as `channel`; `uploader` is the next-best
+    // fallback (e.g. VEVO topic channels). Either gives the card a real name.
+    const channel =
+      typeof meta.channel === "string" && meta.channel
+        ? meta.channel
+        : typeof meta.uploader === "string"
+          ? meta.uploader
+          : "";
     const description = typeof meta.description === "string" ? meta.description : "";
     const chapters = Array.isArray(meta.chapters)
       ? (meta.chapters as Array<{ title?: string }>).map((c) => c.title ?? "").filter(Boolean)
@@ -120,7 +129,7 @@ export async function fetchVideoData(url: string): Promise<VideoData> {
         /* sub parse failed -> treat as none */
       }
     }
-    return { title, description, chapters, transcriptStatus, transcript };
+    return { title, channel, description, chapters, transcriptStatus, transcript };
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }

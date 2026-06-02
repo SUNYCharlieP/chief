@@ -403,8 +403,10 @@ async function main() {
   });
 
   // The iOS app's history sync. Exposes Convex messages.list as the app's exact
-  // contract: { messages: [{ id, role, content, at }] } ascending by at (epoch
-  // ms), with `since` as an at-cursor (rows strictly newer than it).
+  // contract: { messages: [{ id, role, content, at, video? }] } ascending by at
+  // (epoch ms), with `since` as an at-cursor (rows strictly newer than it).
+  // `video` is an optional { id, title, channel, url } on messages that surface
+  // a YouTube video (see attachVideo); absent on every other message.
   app.get("/messages", async (req, res) => {
     const conversationId = String(req.query.conversationId ?? "");
     if (!conversationId) {
@@ -426,7 +428,15 @@ async function main() {
         messages = messages.filter((m) => m.at > since);
       }
       messages.sort((a, b) => a.at - b.at);
-      res.json({ messages });
+      // Enrich the final set (post-filter) with structured video metadata so the
+      // app's video card can show the real title + channel instead of "YouTube
+      // video". A message "surfaces" a video when it carries a watch URL (either
+      // side of the conversation); we look the id up in the metadata the server
+      // already keeps from youtube-discover/analyze. Additive: `video` is present
+      // only on surface messages we have metadata for; the {id, role, content,
+      // at} shape is unchanged for everything else.
+      const enriched = await Promise.all(messages.map(attachVideo));
+      res.json({ messages: enriched });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -537,6 +547,70 @@ function pushPreview(reply: string): string {
   const flat = reply.replace(/\s+/g, " ").trim();
   if (!flat) return "Your reply is ready.";
   return flat.length > 180 ? `${flat.slice(0, 177)}…` : flat;
+}
+
+// --- Video metadata for the app's video card -----------------------------
+
+interface VideoMeta { id: string; title: string; channel: string; url: string }
+
+// Pull the first YouTube video id out of message text. Anchored on YouTube
+// hosts so a stray "v=..." elsewhere can't false-positive.
+function extractYouTubeId(text: string): string | null {
+  const patterns = [
+    /youtu\.be\/([A-Za-z0-9_-]{11})/,
+    /youtube\.com\/(?:watch\?(?:[^\s]*&)?v=|embed\/|shorts\/|live\/|v\/)([A-Za-z0-9_-]{11})/,
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+// Titles/channels are immutable once known, so we cache only fully-populated
+// hits forever. A partial hit (title but no channel yet — e.g. an old analysis
+// row predating the channel capture) is returned but NOT cached, so a later
+// re-analysis can still surface the channel.
+const videoMetaCache = new Map<string, VideoMeta>();
+
+async function lookupVideoMeta(videoId: string): Promise<VideoMeta | null> {
+  const cached = videoMetaCache.get(videoId);
+  if (cached) return cached;
+  let title = "", channel = "", url = "";
+  try {
+    // youtubeAnalysis covers interactively pulled/pasted videos (the app's main
+    // case); youtubeVideos backfills title/channel for discover-surfaced picks.
+    const an = await convexClient.query(convexApi.youtubeAnalysis.get, { videoId });
+    if (an) { title = an.title || ""; channel = an.channelTitle || ""; url = an.url || ""; }
+    if (!title || !channel) {
+      const vid = await convexClient.query(convexApi.youtubeVideos.get, { videoId });
+      if (vid) {
+        title = title || vid.title || "";
+        channel = channel || vid.channelTitle || "";
+        url = url || vid.url || "";
+      }
+    }
+  } catch {
+    return null;
+  }
+  if (!title) return null;
+  const meta: VideoMeta = { id: videoId, title, channel, url: url || `https://www.youtube.com/watch?v=${videoId}` };
+  if (title && channel) videoMetaCache.set(videoId, meta);
+  return meta;
+}
+
+// Attach `video` to a message that surfaces a YouTube watch URL, if the server
+// has metadata for it. The link can sit on either side — Chief's proactive
+// "worth a watch" line or Charlie's "pull this <url>" — and the app renders the
+// card on whichever message carries it, so we don't gate on role. Returns the
+// message untouched when there's no link or no known metadata.
+async function attachVideo<T extends { content: string }>(
+  msg: T,
+): Promise<T | (T & { video: VideoMeta })> {
+  const id = extractYouTubeId(msg.content);
+  if (!id) return msg;
+  const video = await lookupVideoMeta(id);
+  return video ? { ...msg, video } : msg;
 }
 
 main().catch((err) => {
