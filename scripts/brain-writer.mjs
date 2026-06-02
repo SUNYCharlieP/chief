@@ -8,8 +8,8 @@
 //   - the only permitted operation is appending to the canonical Skills.md;
 //   - any path/target/action in the request beyond "skills.append" is ignored;
 //   - every write is preceded by a timestamped backup.
-// After it writes the canonical, the existing brain-mirror rsync propagates the
-// change into /Users/Shared/Brain, where the Chief server picks it up.
+// The server reads this canonical file directly and confirms its write against
+// it, so the write is visible the moment this append lands — no mirror hop.
 
 import { readdir, readFile, writeFile, rename, mkdir, unlink } from "node:fs/promises";
 import { homedir } from "node:os";

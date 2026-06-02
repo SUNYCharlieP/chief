@@ -4,7 +4,14 @@ import { homedir } from "node:os";
 
 // Canonical context: the 4 markdown files that describe who Chief is talking
 // to and how it should behave. Override location with CHIEF_BRAIN_DIR.
-const BRAIN_DIR =
+//
+// Exported as the SINGLE source of truth for the brain location. The read path
+// (here), the write-confirm (brain-write.ts) and the skill-detector all import
+// this, so they can never diverge onto different defaults. Previously brain-write
+// and skill-detector defaulted to the /Users/Shared/Brain mirror while this read
+// iCloud directly; that split meant a brain write confirmed against a different
+// file than the reader used, so if the mirror froze a real write reported failed.
+export const BRAIN_DIR =
   process.env.CHIEF_BRAIN_DIR ??
   `${homedir()}/Library/Mobile Documents/com~apple~CloudDocs/Brain`;
 

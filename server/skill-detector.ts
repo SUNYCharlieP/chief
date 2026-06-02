@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { api } from "../convex/_generated/api.js";
 import { convex } from "./convex-client.js";
+import { BRAIN_DIR } from "./brain.js";
 
 // Stage B detector. A deterministic, no-ML heuristic over git-commit
 // observations: cluster commit subjects by document-frequency of meaningful
@@ -10,7 +11,8 @@ import { convex } from "./convex-client.js";
 
 const WINDOW_DAYS = Number(process.env.CHIEF_SKILL_WINDOW_DAYS ?? 30);
 const DF_THRESHOLD = Number(process.env.CHIEF_SKILL_DF_THRESHOLD ?? 3);
-const MIRROR_DIR = process.env.CHIEF_BRAIN_DIR ?? "/Users/Shared/Brain";
+// Same canonical brain the reader and write-confirm use (BRAIN_DIR), not the
+// retired /Users/Shared/Brain mirror.
 const EXCLUDE_REPOS = new Set(
   (process.env.CHIEF_SKILL_DETECT_EXCLUDE ?? "chief")
     .split(",")
@@ -74,7 +76,7 @@ export interface DetectReport {
 
 async function activeSkillsText(): Promise<string> {
   try {
-    const body = await readFile(resolve(MIRROR_DIR, "Skills.md"), "utf8");
+    const body = await readFile(resolve(BRAIN_DIR, "Skills.md"), "utf8");
     const idx = body.indexOf("## Active Skills");
     return (idx >= 0 ? body.slice(idx) : body).toLowerCase();
   } catch {

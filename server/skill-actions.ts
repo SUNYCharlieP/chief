@@ -212,7 +212,7 @@ export async function handlePendingActionReply(
     const res = await appendSkillEntry(active.entry);
     const reply = res.confirmed
       ? `Saved to Skills.md (${res.bytes} bytes appended). Verified in the brain at ${res.mirrorPath}.`
-      : `Submitted, not yet confirmed. Write request ${res.requestId} is queued (${res.bytes} bytes) but the brain mirror at ${res.mirrorPath} hasn't reflected it yet.`;
+      : `Submitted, not yet confirmed. Write request ${res.requestId} is queued (${res.bytes} bytes) but the canonical brain at ${res.mirrorPath} hasn't reflected it yet.`;
     return { handled: true, reply };
   }
 

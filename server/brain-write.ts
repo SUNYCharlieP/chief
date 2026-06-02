@@ -2,17 +2,19 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { stripEmDashes } from "./text-style.js";
+import { BRAIN_DIR } from "./brain.js";
 
-// Stage A local-write executor. Chief (running as user "Chief") cannot write
-// the brain files (owned by charlie), so the only thing this does is drop an
-// append-request into a shared spool dir. A separate charlie-owned launchd
-// agent (com.chief.brain-writer) is the sole authority that validates the
-// request and appends to the canonical iCloud Skills.md; the existing
-// brain-mirror then rsyncs it into the mirror this process reads. We confirm
-// the round-trip by polling the mirror, never by trusting the request.
+// Stage A local-write executor. The server can't write the canonical brain
+// in-process (the write must be backed up + applied under the GUI session), so
+// it drops an append-request into a shared spool dir. The charlie-owned launchd
+// agent (com.chief.brain-writer) is the sole authority that validates the request
+// and appends to the canonical Skills.md. We confirm the round-trip by polling
+// that SAME canonical file the reader (brain.ts) loads from (BRAIN_DIR) for our
+// unique marker, never by trusting the request. Confirming against the canonical
+// (not a downstream mirror) means a write can't report failed just because a
+// mirror hop lagged or stopped.
 
 const SPOOL_DIR = process.env.CHIEF_BRAIN_SPOOL_DIR ?? "/Users/Shared/chief-brain-spool";
-const MIRROR_DIR = process.env.CHIEF_BRAIN_DIR ?? "/Users/Shared/Brain";
 
 const POLL_TRIES = 30;
 const POLL_INTERVAL_MS = 500;
@@ -27,9 +29,9 @@ export function sha256(s: string): string {
 
 export interface AppendResult {
   confirmed: boolean;
-  // The mirror Skills.md this process can see and verified the round-trip
-  // against. The durable write lands in the canonical iCloud brain, which the
-  // brain-mirror rsyncs here; we report the path we can actually confirm.
+  // The canonical Skills.md we verified the round-trip against — the SAME file
+  // the brain reader loads from. (Field name kept for callers; it is the
+  // canonical brain path now, not a downstream mirror.)
   mirrorPath: string;
   bytes: number;
   requestId: string;
@@ -67,19 +69,21 @@ export async function appendSkillEntry(rawEntry: string): Promise<AppendResult> 
   await writeFile(tmp, payload, "utf8");
   await rename(tmp, finalPath);
 
-  const confirmed = await pollMirrorForMarker(marker);
-  return { confirmed, mirrorPath: resolve(MIRROR_DIR, "Skills.md"), bytes, requestId };
+  const confirmed = await pollCanonicalForMarker(marker);
+  return { confirmed, mirrorPath: resolve(BRAIN_DIR, "Skills.md"), bytes, requestId };
 }
 
 // Confirm THIS write by its unique requestId marker, never by entry content.
-async function pollMirrorForMarker(marker: string): Promise<boolean> {
-  const mirrorSkills = resolve(MIRROR_DIR, "Skills.md");
+// Polls the canonical Skills.md (BRAIN_DIR) — the same file the reader loads —
+// so confirmation tracks the durable write directly, with no mirror hop to lag.
+async function pollCanonicalForMarker(marker: string): Promise<boolean> {
+  const canonicalSkills = resolve(BRAIN_DIR, "Skills.md");
   for (let i = 0; i < POLL_TRIES; i++) {
     try {
-      const body = await readFile(mirrorSkills, "utf8");
+      const body = await readFile(canonicalSkills, "utf8");
       if (body.includes(marker)) return true;
     } catch {
-      // mirror not readable yet; retry
+      // canonical not readable yet; retry
     }
     await sleep(POLL_INTERVAL_MS);
   }
