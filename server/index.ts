@@ -331,13 +331,27 @@ async function main() {
     }
   });
 
-  // Chat endpoint for local testing and the debug dashboard
+  // Chat endpoint for local testing and the debug dashboard.
+  //
+  // The iOS app channel (conversationId "app:*") goes async: a long turn (e.g.
+  // 75s video analysis) blows past the app's ~30s socket timeout, so the app
+  // gives up even though the reply lands in Convex. Instead we ack with a fast
+  // 202, process the turn in the background, persist the assistant reply (as
+  // before), and fire a push so the app knows to pull GET /messages. Any other
+  // caller keeps the synchronous reply-in-body contract.
   app.post("/chat", async (req, res) => {
     const { conversationId, content } = req.body ?? {};
     if (!conversationId || !content) {
       res.status(400).json({ error: "conversationId and content required" });
       return;
     }
+
+    if (isAppChannel(conversationId)) {
+      res.status(202).json({ accepted: true });
+      void processAppTurn(conversationId, content);
+      return;
+    }
+
     try {
       const reply = await handleUserMessage({
         conversationId,
@@ -486,6 +500,43 @@ async function main() {
         .finally(() => process.exit(signalExitCodes[sig]));
     });
   }
+}
+
+// The iOS app talks on conversationId "app:<user>" (e.g. "app:charlie"). That
+// channel is the one we run asynchronously — everything else (debug dashboard,
+// iMessage transport) stays synchronous.
+function isAppChannel(conversationId: string): boolean {
+  return conversationId.startsWith("app:");
+}
+
+// Run an app turn in the background after the route already acked with 202.
+// handleUserMessage still persists the assistant reply to Convex (so GET
+// /messages returns it); once it resolves we fire a push to tell the app the
+// reply is ready to pull. Nothing awaits this, so it must never throw.
+async function processAppTurn(conversationId: string, content: string): Promise<void> {
+  try {
+    const reply = await handleUserMessage({
+      conversationId,
+      content,
+      persistAssistantReply: true,
+    });
+    if (apnsConfigured()) {
+      const result = await sendPush("Chief", pushPreview(reply));
+      if (!result.ok) {
+        console.error("[app] push after reply failed:", result.error ?? result.reason ?? result);
+      }
+    }
+  } catch (err) {
+    console.error(`[app] background turn for ${conversationId} failed:`, err);
+  }
+}
+
+// Collapse a reply into a short single-line push body. APNs truncates long
+// alerts anyway; the app pulls the full message from GET /messages.
+function pushPreview(reply: string): string {
+  const flat = reply.replace(/\s+/g, " ").trim();
+  if (!flat) return "Your reply is ready.";
+  return flat.length > 180 ? `${flat.slice(0, 177)}…` : flat;
 }
 
 main().catch((err) => {
