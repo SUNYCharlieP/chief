@@ -23,6 +23,7 @@ import {
 import { pickProactiveYoutubeLine } from "./youtube-surface.js";
 import { analyzeVideo } from "./youtube-analyze.js";
 import { readReminders } from "./integrations/reminders.js";
+import { apnsConfigured, sendPush, storeDeviceToken } from "./apns.js";
 import { readCalendar } from "./integrations/calendar.js";
 import { api as convexApi } from "../convex/_generated/api.js";
 import { convex as convexClient } from "./convex-client.js";
@@ -346,6 +347,73 @@ async function main() {
       res.json({ reply });
     } catch (err) {
       console.error(err);
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // --- iOS app transport (built alongside iMessage; no cutover yet) -------
+
+  // The app registers its APNs device token here.
+  app.post("/push/register", async (req, res) => {
+    const { token, platform, env } = req.body ?? {};
+    if (!token || typeof token !== "string") {
+      res.status(400).json({ error: "token (string) required" });
+      return;
+    }
+    try {
+      await storeDeviceToken(token, platform, env);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Fire a test push. With an explicit/stored token it sends for real; with no
+  // token available it probes a placeholder so a BadDeviceToken response proves
+  // the JWT/keyId/teamId/topic/HTTP2 handshake (everything but the token) works.
+  app.post("/push/test", async (req, res) => {
+    if (!apnsConfigured()) {
+      res.status(503).json({ ok: false, configured: false, error: "APNs not configured" });
+      return;
+    }
+    const { token, title, body } = req.body ?? {};
+    const t = title ?? "Chief";
+    const b = body ?? "Test push from the Chief server.";
+    let result = await sendPush(t, b, typeof token === "string" ? token : undefined);
+    if (!token && result.error === "no device token registered") {
+      result = await sendPush(t, b, "0".repeat(64));
+      res.json({ ...result, note: "no real device token stored; probed a placeholder to verify credentials" });
+      return;
+    }
+    res.json(result);
+  });
+
+  // The iOS app's history sync. Exposes Convex messages.list as the app's exact
+  // contract: { messages: [{ id, role, content, at }] } ascending by at (epoch
+  // ms), with `since` as an at-cursor (rows strictly newer than it).
+  app.get("/messages", async (req, res) => {
+    const conversationId = String(req.query.conversationId ?? "");
+    if (!conversationId) {
+      res.status(400).json({ error: "conversationId required" });
+      return;
+    }
+    const limit = Math.min(Number(req.query.limit ?? 50) || 50, 200);
+    const sinceRaw = req.query.since;
+    const since = sinceRaw != null ? Number(sinceRaw) : null;
+    try {
+      const rows = await convexClient.query(convexApi.messages.list, { conversationId, limit });
+      let messages = rows.map((r) => ({
+        id: r._id,
+        role: r.role,
+        content: r.content,
+        at: Math.round(r._creationTime),
+      }));
+      if (since != null && !Number.isNaN(since)) {
+        messages = messages.filter((m) => m.at > since);
+      }
+      messages.sort((a, b) => a.at - b.at);
+      res.json({ messages });
+    } catch (err) {
       res.status(500).json({ error: String(err) });
     }
   });
