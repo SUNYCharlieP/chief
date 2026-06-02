@@ -35,6 +35,25 @@ export const send = mutation({
   },
 });
 
+// Delete a single message by id (e.g. a test/demo message injected into a
+// conversation). Decrements the conversation's message count if present.
+export const remove = mutation({
+  args: { id: v.id("messages") },
+  handler: async (ctx, args) => {
+    const msg = await ctx.db.get(args.id);
+    if (!msg) return { ok: false, reason: "not found" };
+    await ctx.db.delete(args.id);
+    const conv = await ctx.db
+      .query("conversations")
+      .withIndex("by_conversation", (q) => q.eq("conversationId", msg.conversationId))
+      .unique();
+    if (conv && conv.messageCount > 0) {
+      await ctx.db.patch(conv._id, { messageCount: conv.messageCount - 1 });
+    }
+    return { ok: true };
+  },
+});
+
 export const list = query({
   args: { conversationId: v.string(), limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
