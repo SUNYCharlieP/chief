@@ -5,7 +5,7 @@ import { defineRuntimeTool } from "./runtimes/tool.js";
 import { runtimeText, type RuntimeTool } from "./runtimes/types.js";
 import { appendSkillEntry, sha256 } from "./brain-write.js";
 import { runBrainstormOpening } from "./youtube-analyze.js";
-import { submitReminderAdd } from "./reminders-write.js";
+import { executeAction } from "./pending-actions.js";
 
 // Stage A draft-and-ask: on-demand Skills.md candidate drafting.
 //
@@ -149,26 +149,16 @@ export async function handlePendingActionReply(
   const norm = normalize(content);
 
   // Reminders add gate: write ONLY on a whole-message affirmative; else discard.
+  // Shares executeAction with the /actions/approve endpoint so the "yes" reply
+  // and the app's approve button do exactly the same thing (with the requestId
+  // confirm — success is reported only when verified in the refreshed snapshot).
   if (active.kind === "reminder.add") {
     if (AFFIRMATIVES.has(norm)) {
       await convex.mutation(api.pendingActions.setStatus, {
         actionId: active.actionId,
         status: "committed",
       });
-      let req: { title: string; dueISO: string; list: string; amount?: string | null };
-      try {
-        req = JSON.parse(active.entry);
-      } catch {
-        return { handled: true, reply: "That reminder draft was malformed; nothing was added." };
-      }
-      const res = await submitReminderAdd(req);
-      // Honesty: success is reported ONLY when the requestId-stamped reminder is
-      // verified in the refreshed snapshot. Otherwise say plainly that it could
-      // not be confirmed, and do NOT guess the cause (the old message wrongly
-      // blamed permissions when the real cause was a list-name mismatch).
-      const reply = res.confirmed
-        ? `Added to ${req.list}, due ${res.due}.`
-        : `Submitted, but I could NOT confirm "${req.title}" landed in ${req.list}. Do not count on it.`;
+      const { reply } = await executeAction(active);
       return { handled: true, reply };
     }
     await convex.mutation(api.pendingActions.setStatus, {

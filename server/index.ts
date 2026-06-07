@@ -14,6 +14,7 @@ import { startGithubObserver, runGithubObserver } from "./github-observer.js";
 import { startJobObserver, stopJobObserver, runJobObserver } from "./job-observer.js";
 import { isSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import { linkCardFor } from "./link-cards.js";
+import { actionCardFor, approvePendingAction, rejectPendingAction } from "./pending-actions.js";
 import { linearStatusProbe } from "./integrations/linear.js";
 import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
 import {
@@ -380,6 +381,35 @@ async function main() {
 
   // --- iOS app transport (built alongside iMessage; no cutover yet) -------
 
+  // Draft-and-ask: approve/reject a pending action by id. The action executes
+  // ONLY here, on explicit approval — never on creation. Identity-tied: the
+  // actionId must be the conversation's active pending action.
+  app.post("/actions/approve", async (req, res) => {
+    const { conversationId, actionId } = req.body ?? {};
+    if (!conversationId || !actionId) {
+      res.status(400).json({ error: "conversationId and actionId required" });
+      return;
+    }
+    try {
+      res.json(await approvePendingAction(String(conversationId), String(actionId)));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.post("/actions/reject", async (req, res) => {
+    const { conversationId, actionId } = req.body ?? {};
+    if (!conversationId || !actionId) {
+      res.status(400).json({ error: "conversationId and actionId required" });
+      return;
+    }
+    try {
+      res.json(await rejectPendingAction(String(conversationId), String(actionId)));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // The app registers its APNs device token here.
   app.post("/push/register", async (req, res) => {
     const { token, platform, env } = req.body ?? {};
@@ -452,7 +482,18 @@ async function main() {
       // already keeps from youtube-discover/analyze. Additive: `video` is present
       // only on surface messages we have metadata for; the {id, role, content,
       // at} shape is unchanged for everything else.
-      const enriched = await Promise.all(messages.map(enrichMessage));
+      const enriched = (await Promise.all(messages.map(enrichMessage))) as Array<Record<string, unknown>>;
+      // Surface the conversation's single active (pending, unexpired) action as an
+      // "action" card on its draft message — the first assistant reply at/after it
+      // was staged — so the app can render approve/reject. Identity-tied: the app
+      // sends the actionId back, which must still be the active one.
+      const activeAction = await convexClient.query(convexApi.pendingActions.getActive, { conversationId });
+      if (activeAction) {
+        const target = enriched.find(
+          (m) => m.role === "assistant" && typeof m.at === "number" && m.at >= activeAction.createdAt - 1000,
+        );
+        if (target) target.card = actionCardFor(activeAction);
+      }
       res.json({ messages: enriched });
     } catch (err) {
       res.status(500).json({ error: String(err) });
