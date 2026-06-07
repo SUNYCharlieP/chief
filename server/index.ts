@@ -13,6 +13,7 @@ import { startLinearObserver, stopLinearObserver, runLinearObserver } from "./li
 import { startGithubObserver, runGithubObserver } from "./github-observer.js";
 import { startJobObserver, stopJobObserver, runJobObserver } from "./job-observer.js";
 import { isSlashCommand, handleSlashCommand } from "./slash-commands.js";
+import { linkCardFor } from "./link-cards.js";
 import { linearStatusProbe } from "./integrations/linear.js";
 import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
 import {
@@ -451,7 +452,7 @@ async function main() {
       // already keeps from youtube-discover/analyze. Additive: `video` is present
       // only on surface messages we have metadata for; the {id, role, content,
       // at} shape is unchanged for everything else.
-      const enriched = await Promise.all(messages.map(attachVideo));
+      const enriched = await Promise.all(messages.map(enrichMessage));
       res.json({ messages: enriched });
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -636,6 +637,16 @@ async function attachVideo<T extends { content: string }>(
   if (!id) return msg;
   const video = await lookupVideoMeta(id);
   return video ? { ...msg, video } : msg;
+}
+
+// Enrich a message for the app: a YouTube message gets video metadata; otherwise
+// a message with plain URL(s) gets a rich link card. Both are additive — the
+// message `content` is unchanged either way.
+async function enrichMessage<T extends { content: string }>(msg: T): Promise<object> {
+  const withVideo = await attachVideo(msg);
+  if ("video" in withVideo) return withVideo;
+  const card = await linkCardFor(msg.content);
+  return card ? { ...msg, card } : msg;
 }
 
 main().catch((err) => {
