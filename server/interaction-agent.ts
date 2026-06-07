@@ -355,6 +355,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
           role: "assistant",
           content: muteReply,
           turnId,
+          complete: true,
         });
       }
       return muteReply;
@@ -370,6 +371,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
           role: "assistant",
           content: reply,
           turnId,
+          complete: true,
         });
       }
       return reply;
@@ -432,6 +434,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
         role: "assistant",
         content: reply,
         turnId,
+        complete: true,
       });
     }
     return reply;
@@ -452,6 +455,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
         role: "assistant",
         content: reply,
         turnId,
+        complete: true,
       });
     }
     return reply;
@@ -687,6 +691,7 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
       role: "assistant",
       content: reply,
       turnId,
+      complete: true,
     });
   }
 

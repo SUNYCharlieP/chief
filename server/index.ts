@@ -435,6 +435,10 @@ async function main() {
         role: r.role,
         content: r.content,
         at: Math.round(r._creationTime),
+        // Terminal reply of a turn. The app keeps its working animation up until
+        // it polls a complete=true assistant message (poll-reliable, independent
+        // of push). Absent/false on intermediate progress messages.
+        complete: r.complete ?? false,
       }));
       if (since != null && !Number.isNaN(since)) {
         messages = messages.filter((m) => m.at > since);

@@ -11,6 +11,10 @@ export default defineSchema({
     createdAt: v.number(),
     imageStorageIds: v.optional(v.array(v.id("_storage"))),
     mediaError: v.optional(v.string()),
+    // True only on the terminal reply of a turn (the real done-state). The app
+    // keeps its working animation up until it polls a complete=true assistant
+    // message, independent of push delivery. Absent on intermediate progress.
+    complete: v.optional(v.boolean()),
   })
     .index("by_conversation", ["conversationId"])
     .index("by_conversation_turn", ["conversationId", "turnId"])

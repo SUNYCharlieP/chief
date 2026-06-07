@@ -10,6 +10,7 @@ export const send = mutation({
     turnId: v.optional(v.string()),
     imageStorageIds: v.optional(v.array(v.id("_storage"))),
     mediaError: v.optional(v.string()),
+    complete: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();

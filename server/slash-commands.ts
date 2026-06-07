@@ -87,6 +87,11 @@ export async function handleSlashCommand(conversationId: string, content: string
     }
   }
 
-  await convex.mutation(api.messages.send, { conversationId, role: "assistant", content: reply });
+  await convex.mutation(api.messages.send, {
+    conversationId,
+    role: "assistant",
+    content: reply,
+    complete: true,
+  });
   return reply;
 }
