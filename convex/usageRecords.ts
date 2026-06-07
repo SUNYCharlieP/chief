@@ -11,6 +11,7 @@ const sourceV = v.union(
   v.literal("proactive"),
   v.literal("morning-scan-scoring"),
   v.literal("morning-scan-format"),
+  v.literal("job-observer"),
 );
 
 export const record = mutation({

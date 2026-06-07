@@ -109,6 +109,7 @@ export default defineSchema({
       v.literal("proactive"),
       v.literal("morning-scan-scoring"),
       v.literal("morning-scan-format"),
+      v.literal("job-observer"),
     ),
     conversationId: v.optional(v.string()),
     turnId: v.optional(v.string()),
@@ -304,6 +305,7 @@ export default defineSchema({
       v.literal("github-pr"),
       v.literal("github-release"),
       v.literal("github-push"),
+      v.literal("job-posting"),
     ),
     source: v.string(), // repo name, "morning-scan", etc.
     summary: v.string(),

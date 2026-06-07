@@ -11,6 +11,7 @@ import { startProactiveEngagement, runProactiveCheck } from "./proactive-engagem
 import { startGitObserver, stopGitObserver, runGitObserver } from "./git-observer.js";
 import { startLinearObserver, stopLinearObserver, runLinearObserver } from "./linear-observer.js";
 import { startGithubObserver, runGithubObserver } from "./github-observer.js";
+import { startJobObserver, stopJobObserver, runJobObserver } from "./job-observer.js";
 import { linearStatusProbe } from "./integrations/linear.js";
 import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
 import {
@@ -233,6 +234,16 @@ async function main() {
   app.post("/observe/github/run", async (_req, res) => {
     try {
       res.json(await runGithubObserver());
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Job-intel observer on demand, bypassing the hourly cron. NOTE: if it finds a
+  // new keep and the observer is already primed, this WILL push to the phone.
+  app.post("/observe/jobs/run", async (_req, res) => {
+    try {
+      res.json(await runJobObserver());
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -480,6 +491,8 @@ async function main() {
 
   startGithubObserver();
 
+  startJobObserver();
+
   startSkillDigest().catch((err) =>
     console.error("[skill-digest] scheduler failed to start", err),
   );
@@ -502,6 +515,7 @@ async function main() {
       stopMorningScan();
       stopGitObserver();
       stopLinearObserver();
+      stopJobObserver();
       stopSkillDigest();
       stopYoutubeDiscover();
       void stopBrainWatcher();

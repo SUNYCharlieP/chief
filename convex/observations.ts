@@ -10,6 +10,7 @@ const kindUnion = v.union(
   v.literal("github-pr"),
   v.literal("github-release"),
   v.literal("github-push"),
+  v.literal("job-posting"),
 );
 
 // Insert only if the dedupKey hasn't been seen. Returns true if a new row was
