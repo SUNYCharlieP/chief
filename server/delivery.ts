@@ -44,7 +44,15 @@ export async function deliverOutbound(opts: {
   pushTitle?: string;
 }): Promise<DeliveryResult> {
   const target = deliveryTarget();
-  const res: DeliveryResult = { target, delivered: false };
+  // Initialize every channel to false so a skipped channel reports false (not
+  // sent) rather than undefined — e.g. CHIEF_DELIVERY=app logs imessage=false.
+  const res: DeliveryResult = {
+    target,
+    delivered: false,
+    imessageSent: false,
+    appPersisted: false,
+    pushed: false,
+  };
 
   if (target === "imessage" || target === "both") {
     try {
