@@ -1,7 +1,7 @@
 import { Cron } from "croner";
 import { api } from "../convex/_generated/api.js";
 import { convex } from "./convex-client.js";
-import { sendImessage } from "./imessage.js";
+import { deliverOutbound } from "./delivery.js";
 import { loadBrain, getBrainBlock } from "./brain.js";
 import { getRuntimeConfig } from "./runtime-config.js";
 import { runAgentRuntime } from "./runtimes/index.js";
@@ -239,12 +239,12 @@ export async function runProactiveCheck(opts: ProactiveOpts = {}): Promise<Proac
   // GATE 6: the actual send is reached ONLY after every gate passed.
   const contact = process.env.CHIEF_CONTACT ?? "";
   if (!contact) return { ...out, decision: "silent", gate: "no-contact" };
-  const sent = await sendImessage(contact, best.message);
-  if (!sent) {
-    // The send was dropped. Do NOT mark the observation surfaced and do NOT burn
-    // a ration slot: it stays fresh and retryable on a later tick, rather than
-    // being silently lost. (sendImessage returns false on no-chat or any chunk
-    // failure, instead of the old swallow-and-pretend-success.)
+  // Phase-1 cutover: deliver through CHIEF_DELIVERY channel(s) (default both).
+  const delivery = await deliverOutbound({ contact, body: best.message, pushTitle: "Chief" });
+  if (!delivery.delivered) {
+    // The send was dropped on every configured channel. Do NOT mark the
+    // observation surfaced and do NOT burn a ration slot: it stays fresh and
+    // retryable on a later tick, rather than being silently lost.
     return { ...out, decision: "silent", gate: "send-failed" };
   }
   // Persist so the dispatcher remembers what it proactively said (no amnesia).

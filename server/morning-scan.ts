@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { resolve, dirname } from "node:path";
 import { api } from "../convex/_generated/api.js";
 import { convex } from "./convex-client.js";
-import { sendImessage } from "./imessage.js";
+import { deliverOutbound } from "./delivery.js";
 import { loadBrain, getBrainBlock } from "./brain.js";
 import {
   listConfiguredSources,
@@ -648,26 +648,27 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
     return { runId, sentTo: contact, bodyChars: 0, source, elapsedMs: elapsed, error };
   }
 
-  let sent = false;
-  try {
-    sent = await sendImessage(contact, body);
-  } catch (err) {
-    sent = false;
-    console.error(`[morning-surface] send threw: ${String(err)}`);
-  }
+  // Phase-1 cutover: deliver through the channel(s) selected by CHIEF_DELIVERY
+  // (default both). The app path persists to app:charlie + APNs push; iMessage
+  // stays active in parallel until phase 2.
+  const delivery = await deliverOutbound({ contact, body, pushTitle: "Chief briefing" });
+  const sent = delivery.delivered;
+  console.log(
+    `[morning-surface] delivery target=${delivery.target} imessage=${delivery.imessageSent ?? "-"} app=${delivery.appPersisted ?? "-"} push=${delivery.pushed ?? "-"}${delivery.pushReason ? `(${delivery.pushReason})` : ""}`,
+  );
   if (!sent) {
-    // Send dropped. Do NOT mark candidates surfaced or commit the YouTube pick,
-    // so the items remain available for the next run rather than being silently
-    // suppressed by a send that never went out.
+    // Nothing landed on any configured channel. Do NOT mark candidates surfaced
+    // or commit the YouTube pick, so the items remain available for the next run.
     const elapsed = Date.now() - started;
+    const error = `delivery failed (target ${delivery.target})`;
     await convex.mutation(api.scanRuns.update, {
       runId,
       status: "failed",
-      error: "iMessage send failed",
+      error,
       elapsedMs: elapsed,
       surfaceLog: body,
     });
-    return { runId, sentTo: contact, bodyChars: body.length, source, elapsedMs: elapsed, error: "iMessage send failed" };
+    return { runId, sentTo: contact, bodyChars: body.length, source, elapsedMs: elapsed, error };
   }
 
   // CONFIRMED sent: only now commit the surfaced state.
