@@ -92,6 +92,7 @@ export async function sendPush(
   title: string,
   body: string,
   tokenOverride?: string,
+  data?: Record<string, unknown>,
 ): Promise<PushResult> {
   if (!apnsConfigured()) return { ok: false, configured: false, error: "APNs not configured" };
   const token = tokenOverride ?? (await readStoredToken());
@@ -99,11 +100,14 @@ export async function sendPush(
   try {
     const client = await getClient();
     const { Notification, Priority, PushType } = await import("apns2");
+    // `data` is merged into the payload top-level (alongside aps), so the app
+    // reads it from the notification's userInfo. Used to mark turn completion.
     const notification = new Notification(token, {
       type: PushType.alert,
       priority: Priority.immediate, // 10
       alert: { title, body },
       sound: "default",
+      ...(data ? { data } : {}),
     });
     await client.send(notification);
     return { ok: true, configured: true, statusCode: 200, token: maskToken(token), env: APNS_ENV };

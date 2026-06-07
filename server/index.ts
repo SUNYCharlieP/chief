@@ -12,6 +12,7 @@ import { startGitObserver, stopGitObserver, runGitObserver } from "./git-observe
 import { startLinearObserver, stopLinearObserver, runLinearObserver } from "./linear-observer.js";
 import { startGithubObserver, runGithubObserver } from "./github-observer.js";
 import { startJobObserver, stopJobObserver, runJobObserver } from "./job-observer.js";
+import { isSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import { linearStatusProbe } from "./integrations/linear.js";
 import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
 import {
@@ -539,13 +540,19 @@ function isAppChannel(conversationId: string): boolean {
 // reply is ready to pull. Nothing awaits this, so it must never throw.
 async function processAppTurn(conversationId: string, content: string): Promise<void> {
   try {
-    const reply = await handleUserMessage({
-      conversationId,
-      content,
-      persistAssistantReply: true,
-    });
+    // App-channel messages starting with "/" are commands, routed to a handler
+    // instead of the LLM (see slash-commands.ts).
+    const reply = isSlashCommand(content)
+      ? await handleSlashCommand(conversationId, content)
+      : await handleUserMessage({ conversationId, content, persistAssistantReply: true });
     if (apnsConfigured()) {
-      const result = await sendPush("Chief", pushPreview(reply));
+      // Mark this as the turn-complete push so the app can tell the real
+      // done-state apart from intermediate progress (which never pushes) and
+      // keep its "working" animation up across the whole turn.
+      const result = await sendPush("Chief", pushPreview(reply), undefined, {
+        event: "turn_complete",
+        conversationId,
+      });
       if (!result.ok) {
         console.error("[app] push after reply failed:", result.error ?? result.reason ?? result);
       }

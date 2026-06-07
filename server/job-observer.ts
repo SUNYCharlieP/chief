@@ -108,7 +108,7 @@ function emptyReport(): JobObserveReport {
   };
 }
 
-export async function runJobObserver(): Promise<JobObserveReport> {
+export async function runJobObserver(opts: { force?: boolean } = {}): Promise<JobObserveReport> {
   const started = Date.now();
   const report = emptyReport();
 
@@ -125,7 +125,9 @@ export async function runJobObserver(): Promise<JobObserveReport> {
   const tz = await getUserTimezone();
   const hour = localHour(tz);
   report.withinHours = hour >= START_HOUR && hour <= END_HOUR;
-  if (!report.withinHours) {
+  // The cron only fires in-window; a manual /jobs run passes force to scan now
+  // regardless of the hour.
+  if (!report.withinHours && !opts.force) {
     report.elapsedMs = Date.now() - started;
     return report;
   }
