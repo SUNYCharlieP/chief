@@ -78,6 +78,7 @@ export interface JobObserveReport {
   primedBefore: boolean;
   fetched: number;
   survivors: number; // passed pre-filter + dedupe, before the cap
+  baselined: number; // recorded silently on the first-run prime (no scoring)
   scored: number;
   keeps: number;
   drops: number;
@@ -95,6 +96,7 @@ function emptyReport(): JobObserveReport {
     primedBefore: false,
     fetched: 0,
     survivors: 0,
+    baselined: 0,
     scored: 0,
     keeps: 0,
     drops: 0,
@@ -161,13 +163,45 @@ export async function runJobObserver(): Promise<JobObserveReport> {
   }
   survivors.sort((a, b) => b.relevance - a.relevance);
   report.survivors = survivors.length;
-  const toScore = survivors.slice(0, CAP_N);
 
+  // First-run priming: baseline the ENTIRE current backlog into the dedup ledger
+  // WITHOUT scoring or pushing, so a fresh deploy never floods the phone with
+  // already-open listings. Only listings that appear AFTER priming can score and
+  // push. Zero LLM calls. Recording the FULL backlog (not just the top CAP_N) is
+  // what actually suppresses it — a capped prime only defers the flood one tick.
+  if (!primed) {
+    for (const l of survivors) {
+      try {
+        await convex.mutation(api.observations.recordIfNew, {
+          observationId: `obs_job_${l.id}`,
+          kind: "job-posting",
+          source: "adzuna",
+          summary: `[job baseline] ${l.title} — ${l.company} (${l.locationName || "remote"})`,
+          detail: JSON.stringify({
+            adzunaId: l.id,
+            baseline: true,
+            company: l.company,
+            location: l.locationName,
+            salary: salaryLabel(l),
+            url: l.url,
+            query: l.query,
+          }),
+          observedAt: l.created ? new Date(l.created).getTime() : Date.now(),
+          dedupKey: `job:${l.id}`,
+        });
+        report.baselined += 1;
+      } catch (err) {
+        report.errors.push(`prime ${l.id}: ${String(err)}`);
+      }
+    }
+    await convex.mutation(api.settings.set, { key: PRIMED_KEY, value: "true" });
+    report.elapsedMs = Date.now() - started;
+    return report;
+  }
+
+  const toScore = survivors.slice(0, CAP_N);
   if (toScore.length === 0) {
-    // The common case: most polls find nothing new and cost only the Adzuna
-    // calls. Prime the flag even on an empty first run so we don't keep treating
-    // future runs as "first".
-    if (!primed) await convex.mutation(api.settings.set, { key: PRIMED_KEY, value: "true" });
+    // The common case: most polls find nothing new and cost only the Adzuna calls.
     report.elapsedMs = Date.now() - started;
     return report;
   }
@@ -234,8 +268,9 @@ export async function runJobObserver(): Promise<JobObserveReport> {
     }
 
     // SURFACE: push the moment a new listing scores keep — immediately, not
-    // batched. During priming we record but don't push (see above).
-    if (verdict === "keep" && primed) {
+    // batched. Only reached post-priming, so every keep here is a genuinely new
+    // listing that appeared after the baseline.
+    if (verdict === "keep") {
       try {
         const delivery = await deliverOutbound({
           contact,
@@ -276,8 +311,6 @@ export async function runJobObserver(): Promise<JobObserveReport> {
     }
   }
 
-  if (!primed) await convex.mutation(api.settings.set, { key: PRIMED_KEY, value: "true" });
-
   report.elapsedMs = Date.now() - started;
   return report;
 }
@@ -295,7 +328,7 @@ export function startJobObserver(): void {
         console.log(
           `[job-observer] tick: fetched=${r.fetched} survivors=${r.survivors} scored=${r.scored} ` +
             `keep=${r.keeps} pushed=${r.pushed} calls=${r.llmCalls} cost=$${r.costUsd.toFixed(4)}` +
-            `${r.primedBefore ? "" : " (primed silently)"} (${r.elapsedMs}ms)`,
+            `${r.primedBefore ? "" : ` (primed silently, baselined=${r.baselined})`} (${r.elapsedMs}ms)`,
         );
         if (r.errors.length > 0) {
           console.warn(`[job-observer] errors: ${r.errors.slice(0, 5).join("; ")}`);
@@ -311,7 +344,8 @@ export function startJobObserver(): void {
       .then((r) =>
         console.log(
           `[job-observer] initial run: configured=${r.configured} withinHours=${r.withinHours} ` +
-            `scored=${r.scored} keep=${r.keeps} pushed=${r.pushed}${r.primedBefore ? "" : " (primed silently)"}`,
+            `scored=${r.scored} keep=${r.keeps} pushed=${r.pushed}` +
+            `${r.primedBefore ? "" : ` (primed silently, baselined=${r.baselined})`}`,
         ),
       )
       .catch((err) => console.error("[job-observer] initial run failed", err));
