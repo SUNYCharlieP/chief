@@ -16,6 +16,7 @@ import { isSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import { linkCardFor } from "./link-cards.js";
 import { actionCardFor, approvePendingAction, rejectPendingAction } from "./pending-actions.js";
 import { authMiddleware, authStartupSummary, wsAuthAllowed } from "./auth.js";
+import { processImageUpload } from "./images/upload.js";
 import { linearStatusProbe } from "./integrations/linear.js";
 import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
 import {
@@ -87,6 +88,11 @@ async function main() {
   // ordering the JSON parser consumes the stream first and the raw buffer
   // arrives empty.
   app.use("/composio/webhook", express.raw({ type: "application/json", limit: "2mb" }));
+  // Image upload reads raw bytes (any content-type; the true type is sniffed
+  // from magic bytes in processImageUpload). Mounted before express.json so the
+  // binary body isn't run through the JSON parser. 11mb cap = the 10mb image
+  // limit plus slack; express.raw 413s anything larger before it buffers fully.
+  app.use("/upload/image", express.raw({ type: "*/*", limit: "11mb" }));
   app.use(express.json({ limit: "2mb" }));
 
   // Single-user bearer auth (defense-in-depth behind Tailscale). Mounted after
@@ -386,6 +392,52 @@ async function main() {
     }
   });
 
+  // Photo upload (app channel). Behind the global bearer auth like everything
+  // else. Receives a single image as a raw body, validates + (HEIC→JPEG)
+  // converts + stores it via processImageUpload, then runs the analysis turn
+  // ASYNC (202 ack, model vision in the background, push when done) — same
+  // transport as /chat. The uploaded bytes are never served back or executed.
+  //
+  //   POST /upload/image?conversationId=app:charlie&caption=<urlencoded question>
+  //   Authorization: Bearer <token>
+  //   Content-Type: image/jpeg | image/png | image/webp | image/heic
+  //   body: raw image bytes (<= 10MB)
+  // -> 202 {accepted, storageId, mediaType, converted}; the analysis arrives as
+  //    an assistant message via GET /messages (+ push), like any turn.
+  app.post("/upload/image", async (req, res) => {
+    const conversationId = String(req.query.conversationId ?? "");
+    if (!conversationId || !isAppChannel(conversationId)) {
+      res.status(400).json({ error: "conversationId (app channel, e.g. app:charlie) required" });
+      return;
+    }
+    const body = req.body as unknown;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      res.status(415).json({ error: "expected a raw image body (jpeg/png/webp/heic)" });
+      return;
+    }
+    const caption =
+      (typeof req.query.caption === "string" ? req.query.caption : req.header("x-image-caption")) ?? "";
+
+    const result = await processImageUpload(body);
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.reason });
+      return;
+    }
+    res.status(202).json({
+      accepted: true,
+      storageId: result.storageId,
+      mediaType: result.mediaType,
+      converted: result.converted,
+    });
+    // Default question if the user sent the photo with no caption.
+    const question =
+      caption.trim() ||
+      "Analyze this image. Read any visible text/specs/labels and tell me what matters.";
+    void processAppTurn(conversationId, question, [
+      { storageId: result.storageId, mediaType: result.mediaType },
+    ]);
+  });
+
   // --- iOS app transport (built alongside iMessage; no cutover yet) -------
 
   // Draft-and-ask: approve/reject a pending action by id. The action executes
@@ -603,13 +655,19 @@ function isAppChannel(conversationId: string): boolean {
 // handleUserMessage still persists the assistant reply to Convex (so GET
 // /messages returns it); once it resolves we fire a push to tell the app the
 // reply is ready to pull. Nothing awaits this, so it must never throw.
-async function processAppTurn(conversationId: string, content: string): Promise<void> {
+async function processAppTurn(
+  conversationId: string,
+  content: string,
+  images?: Array<{ storageId: string; mediaType: string }>,
+): Promise<void> {
   try {
     // App-channel messages starting with "/" are commands, routed to a handler
-    // instead of the LLM (see slash-commands.ts).
-    const reply = isSlashCommand(content)
+    // instead of the LLM (see slash-commands.ts). An image turn always goes to
+    // the model (vision), never the slash router.
+    const useSlash = !(images && images.length > 0) && isSlashCommand(content);
+    const reply = useSlash
       ? await handleSlashCommand(conversationId, content)
-      : await handleUserMessage({ conversationId, content, persistAssistantReply: true });
+      : await handleUserMessage({ conversationId, content, persistAssistantReply: true, images });
     if (apnsConfigured()) {
       // Mark this as the turn-complete push so the app can tell the real
       // done-state apart from intermediate progress (which never pushes) and
