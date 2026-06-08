@@ -51,11 +51,18 @@ Charlie to USE (paste into a cover note / outreach / application) — you are NO
 sending anything. Map his operator/field experience onto THIS role's actual
 duties, using specifics from the listing.
 
-Output plain text Charlie can copy, in this structure:
+Output PLAIN TEXT ONLY — no markdown of any kind. No asterisks or "**" bold, no
+"#" headers, no backticks. Write section labels as plain words followed by a
+colon (e.g. "Positioning hook:") or omit them; use a simple "- " for bullets. Do
+NOT begin with any preamble like "Here's the framing" — start directly with the
+content. The result must read clean both inside a plain text block and pasted
+anywhere.
+
+Structure:
 1. A one-line positioning hook for this exact role.
 2. A short paragraph (3-5 sentences) mapping his ownership/field experience to
    the role's duties, citing specifics from the listing.
-3. 2-3 bullet "proof points" tying his experience to what this employer needs.
+3. 2-3 "- " proof points tying his experience to what this employer needs.
 
 Keep it tight and concrete. No generic filler, no salary talk. Do not invent
 facts beyond the background; if a detail is missing, stay general rather than
