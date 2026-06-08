@@ -15,6 +15,7 @@ import { startJobObserver, stopJobObserver, runJobObserver } from "./job-observe
 import { isSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import { linkCardFor } from "./link-cards.js";
 import { actionCardFor, approvePendingAction, rejectPendingAction } from "./pending-actions.js";
+import { authMiddleware, authStartupSummary, wsAuthAllowed } from "./auth.js";
 import { linearStatusProbe } from "./integrations/linear.js";
 import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
 import {
@@ -87,6 +88,12 @@ async function main() {
   // arrives empty.
   app.use("/composio/webhook", express.raw({ type: "application/json", limit: "2mb" }));
   app.use(express.json({ limit: "2mb" }));
+
+  // Single-user bearer auth (defense-in-depth behind Tailscale). Mounted after
+  // the body parsers and before every route, so it covers all endpoints; /health
+  // and the HMAC-verified Composio webhook are exempted inside the middleware.
+  // Soft-launch by default (CHIEF_AUTH_MODE=accept): logs but never rejects.
+  app.use(authMiddleware);
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true, service: "boop-agent" });
@@ -508,7 +515,11 @@ async function main() {
   });
 
   const server = createServer(app);
-  const wss = new WebSocketServer({ server, path: "/ws" });
+  const wss = new WebSocketServer({
+    server,
+    path: "/ws",
+    verifyClient: (info: { req: import("node:http").IncomingMessage }) => wsAuthAllowed(info.req),
+  });
   wss.on("connection", (ws) => {
     addClient(ws);
     ws.send(JSON.stringify({ event: "hello", data: { ok: true }, at: Date.now() }));
@@ -517,6 +528,7 @@ async function main() {
   const port = Number(process.env.PORT ?? 3456);
   server.listen(port, () => {
     console.log(`chief server listening on :${port}`);
+    console.log(`  ${authStartupSummary()}`);
     console.log(`  health      GET  http://localhost:${port}/health`);
     console.log(`  chat        POST http://localhost:${port}/chat`);
     console.log(`  imessage    poller (CHIEF_CONTACT=${process.env.CHIEF_CONTACT ?? "<unset>"})`);
