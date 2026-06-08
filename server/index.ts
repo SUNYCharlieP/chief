@@ -484,14 +484,18 @@ async function main() {
       // at} shape is unchanged for everything else.
       const enriched = (await Promise.all(messages.map(enrichMessage))) as Array<Record<string, unknown>>;
       // Surface the conversation's single active (pending, unexpired) action as an
-      // "action" card on its draft message — the first assistant reply at/after it
-      // was staged — so the app can render approve/reject. Identity-tied: the app
-      // sends the actionId back, which must still be the active one.
+      // "action" card on its draft message — the LATEST assistant reply at/after it
+      // was staged — so the app can render approve/reject. Latest, not first:
+      // some actions (e.g. job.draft_application) stage a card message and then a
+      // separate prompt message; the action binds to the prompt, leaving the card
+      // (the job match) intact. Identity-tied: the app sends the actionId back,
+      // which must still be the active one.
       const activeAction = await convexClient.query(convexApi.pendingActions.getActive, { conversationId });
       if (activeAction) {
-        const target = enriched.find(
-          (m) => m.role === "assistant" && typeof m.at === "number" && m.at >= activeAction.createdAt - 1000,
+        const candidates = enriched.filter(
+          (m) => m.role === "assistant" && typeof m.at === "number" && (m.at as number) >= activeAction.createdAt - 1000,
         );
+        const target = candidates[candidates.length - 1];
         if (target) target.card = actionCardFor(activeAction);
       }
       res.json({ messages: enriched });

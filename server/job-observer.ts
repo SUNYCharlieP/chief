@@ -20,6 +20,8 @@ import {
   type JobListing,
 } from "./integrations/adzuna.js";
 import { SCORE_MODEL, SCORING_SYSTEM, parseVerdict, scoringPrompt } from "./job-scoring.js";
+import { sha256 } from "./brain-write.js";
+import type { JobDraftInput } from "./job-draft.js";
 
 // Phase 2 job-intel observer. Polls Adzuna hourly during waking hours, drops
 // obvious misses with the cheap pre-filter (no LLM), scores only NEW survivors
@@ -38,6 +40,49 @@ const PRIMED_KEY = "job_observer_primed";
 const DEDUP_LOOKBACK_MS = 35 * 86_400_000; // a touch beyond Adzuna's max_days_old
 
 let observerCron: Cron | null = null;
+
+// The app channel the draft-and-ask action card surfaces on (matches delivery.ts).
+const APP_CONVERSATION = process.env.CHIEF_APP_CONVERSATION ?? "app:charlie";
+// Job draft offers aren't a 30-min confirm like a reminder — Charlie may decide
+// later in the day, so the offer stands for 24h before it expires.
+const JOB_ACTION_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Offer (don't perform) tailored application framing for a keep, via the
+// draft-and-ask layer: a pending "job.draft_application" action + a prompt
+// message it attaches to in the app. Surface-only — nothing drafts until Charlie
+// approves, and even approval only DRAFTS framing for him, never applies.
+async function offerDraftAction(listing: JobListing, why: string): Promise<void> {
+  const entryObj: JobDraftInput = {
+    title: listing.title,
+    company: listing.company,
+    location: listing.locationName,
+    salary: salaryLabel(listing),
+    why,
+    url: listing.url,
+    description: listing.description?.slice(0, 1600),
+  };
+  const entry = JSON.stringify(entryObj);
+  const actionId = `pa_job_${listing.id}`;
+  const now = Date.now();
+  await convex.mutation(api.pendingActions.create, {
+    actionId,
+    conversationId: APP_CONVERSATION,
+    kind: "job.draft_application",
+    pitch: `Draft application framing for ${listing.title} at ${listing.company}`,
+    entry,
+    targetFile: "(none)",
+    sha256: sha256(entry),
+    createdAt: now,
+    expiresAt: now + JOB_ACTION_TTL_MS,
+  });
+  // The prompt message the action card binds to (the latest assistant message
+  // at/after the action — distinct from the job-match card above it).
+  await convex.mutation(api.messages.send, {
+    conversationId: APP_CONVERSATION,
+    role: "assistant",
+    content: `Want me to draft application framing for ${listing.title} at ${listing.company}? Approve and I'll tailor your operator pitch to this role (draft only — I never apply).`,
+  });
+}
 
 function localHour(tz: string, d = new Date()): number {
   const h = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", hour12: false }).format(d);
@@ -273,23 +318,31 @@ export async function runJobObserver(opts: { force?: boolean } = {}): Promise<Jo
     // batched. Only reached post-priming, so every keep here is a genuinely new
     // listing that appeared after the baseline.
     if (verdict === "keep") {
+      let appPersisted = false;
       try {
         const delivery = await deliverOutbound({
           contact,
           body: buildBody(l, why),
           pushTitle: "Job match",
         });
+        appPersisted = !!delivery.appPersisted;
         if (delivery.delivered) report.pushed += 1;
         else report.errors.push(`deliver ${l.id}: not delivered (${delivery.pushReason ?? "?"})`);
       } catch (err) {
         report.errors.push(`deliver ${l.id}: ${String(err)}`);
       }
 
-      // SEAM (future): draft-application-framing action. When the draft-and-ask
-      // action layer exists, this is where Chief would offer to draft tailored
-      // application framing for this keep (mapping Charlie's field/ownership
-      // experience onto the listing). Surface-only for now — Chief NEVER
-      // auto-applies. Build nothing here until that action layer exists.
+      // Offer tailored application framing via the draft-and-ask layer. Only
+      // when the app channel got the match (the card lives in the app), and only
+      // surfaces the offer — Chief NEVER auto-applies; framing is drafted on
+      // Charlie's explicit approve, and even then it's a draft for him to use.
+      if (appPersisted) {
+        try {
+          await offerDraftAction(l, why);
+        } catch (err) {
+          report.errors.push(`offer draft ${l.id}: ${String(err)}`);
+        }
+      }
     }
   }
 

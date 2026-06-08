@@ -168,6 +168,27 @@ export async function handlePendingActionReply(
     return { handled: false };
   }
 
+  // Job draft-application gate: on a whole-message affirmative, draft the
+  // framing (executeAction → draftApplicationFraming, which DRAFTS only, never
+  // applies); anything else discards. Must be explicit here — without it a job
+  // action would fall through to the skills.append default below and wrongly try
+  // to append the job JSON to Skills.md.
+  if (active.kind === "job.draft_application") {
+    if (AFFIRMATIVES.has(norm)) {
+      await convex.mutation(api.pendingActions.setStatus, {
+        actionId: active.actionId,
+        status: "committed",
+      });
+      const { reply } = await executeAction(active);
+      return { handled: true, reply };
+    }
+    await convex.mutation(api.pendingActions.setStatus, {
+      actionId: active.actionId,
+      status: "rejected",
+    });
+    return { handled: false };
+  }
+
   // YouTube heavy stage gate: brainstorm runs ONLY on a whole-message
   // affirmative; anything else discards. Deterministic, no model discretion.
   if (active.kind === "youtube.brainstorm") {

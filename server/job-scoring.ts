@@ -19,7 +19,9 @@ Their selling point is that field and ownership experience: running jobs,
 managing subs and crews, scheduling, estimating, client/GC relationships,
 budgets, and owning P&L on real construction work.`;
 
-const PROFILE = process.env.CHIEF_JOB_PROFILE?.trim() || DEFAULT_PROFILE;
+// Exported so the application-framing drafter (job-draft.ts) frames Charlie off
+// the SAME biographical profile the scorer judged against — one source of truth.
+export const PROFILE = process.env.CHIEF_JOB_PROFILE?.trim() || DEFAULT_PROFILE;
 
 export const SCORING_SYSTEM = `You screen job listings for a candidate pivoting into construction project
 management. Decide KEEP or DROP for a single listing.

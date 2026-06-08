@@ -1,6 +1,7 @@
 import { convex } from "./convex-client.js";
 import { api } from "../convex/_generated/api.js";
 import { submitReminderAdd, humanDate } from "./reminders-write.js";
+import { draftApplicationFraming, type JobDraftInput } from "./job-draft.js";
 
 // The draft-and-ask action layer. A pending action (created by a staging tool,
 // e.g. stage_reminder) is surfaced to Charlie as an "action" card and executes
@@ -42,6 +43,14 @@ export function actionCardFor(action: PendingAction): ActionCard {
     } catch {
       description = "Add a reminder";
     }
+  } else if (action.kind === "job.draft_application") {
+    title = "Draft application";
+    try {
+      const j = JSON.parse(action.entry) as JobDraftInput;
+      description = `Draft application framing for ${j.title} at ${j.company} (I draft only — never apply)`;
+    } catch {
+      description = "Draft application framing for this role (I draft only — never apply)";
+    }
   }
   return {
     type: "action",
@@ -70,8 +79,16 @@ export async function executeAction(action: PendingAction): Promise<{ ok: boolea
         ? { ok: true, reply: `Added to ${req.list}, due ${res.due}. ✓` }
         : { ok: false, reply: `Submitted, but I could NOT confirm “${req.title}” landed in ${req.list}. Do not count on it.` };
     }
-    // SEAM: future kinds dispatch here, e.g.
-    //   case "job.draft_application": return executeJobDraft(action);
+    case "job.draft_application": {
+      let j: JobDraftInput;
+      try {
+        j = JSON.parse(action.entry);
+      } catch {
+        return { ok: false, reply: "That job draft was malformed; nothing was drafted." };
+      }
+      // Drafts framing for Charlie to use — NEVER applies or sends.
+      return draftApplicationFraming(j);
+    }
     default:
       return { ok: false, reply: `Don't know how to execute action kind "${action.kind}".` };
   }

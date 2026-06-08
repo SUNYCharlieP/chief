@@ -365,6 +365,7 @@ export default defineSchema({
       v.literal("skills.append"),
       v.literal("youtube.brainstorm"),
       v.literal("reminder.add"),
+      v.literal("job.draft_application"),
     ),
     status: v.union(
       v.literal("pending"),

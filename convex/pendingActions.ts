@@ -18,6 +18,7 @@ export const create = mutation({
       v.literal("skills.append"),
       v.literal("youtube.brainstorm"),
       v.literal("reminder.add"),
+      v.literal("job.draft_application"),
     ),
     pitch: v.string(),
     entry: v.string(),
