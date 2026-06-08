@@ -684,10 +684,24 @@ async function attachVideo<T extends { content: string }>(
   return video ? { ...msg, video } : msg;
 }
 
-// Enrich a message for the app: a YouTube message gets video metadata; otherwise
-// a message with plain URL(s) gets a rich link card. Both are additive — the
-// message `content` is unchanged either way.
+// Human label for a draft message's `kind` (the block header in the app's draft
+// card). New draft kinds add an entry; unknown ones fall back to "draft".
+const DRAFT_LABELS: Record<string, string> = {
+  "draft.application": "application framing",
+};
+
+// Enrich a message for the app: a copyable draft (kind="draft.*") becomes a
+// "draft" card the app renders with a one-tap copy; a YouTube message gets video
+// metadata; otherwise a message with plain URL(s) gets a rich link card. All are
+// additive — the message `content` is unchanged.
 async function enrichMessage<T extends { content: string }>(msg: T): Promise<object> {
+  const kind = (msg as { kind?: string }).kind;
+  if (kind && kind.startsWith("draft")) {
+    return {
+      ...msg,
+      card: { type: "draft", title: DRAFT_LABELS[kind] ?? "draft", text: msg.content },
+    };
+  }
   const withVideo = await attachVideo(msg);
   if ("video" in withVideo) return withVideo;
   const card = await linkCardFor(msg.content);

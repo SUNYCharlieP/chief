@@ -92,8 +92,9 @@ export async function draftApplicationFraming(j: JobDraftInput): Promise<{ ok: b
     );
     const text = (res.text ?? "").trim();
     if (!text) return { ok: false, reply: "I couldn't draft framing for that role just now — try again." };
-    const header = `Application framing — ${j.title} @ ${j.company} (draft, yours to use; I have NOT applied):\n\n`;
-    return { ok: true, reply: header + text };
+    // Pure framing only — the app's draft card supplies the label and the
+    // "yours to use, nothing was sent" context, and copies exactly this text.
+    return { ok: true, reply: text };
   } catch (err) {
     return { ok: false, reply: `Couldn't draft the framing: ${String(err)}` };
   }

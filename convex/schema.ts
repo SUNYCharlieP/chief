@@ -15,6 +15,11 @@ export default defineSchema({
     // keeps its working animation up until it polls a complete=true assistant
     // message, independent of push delivery. Absent on intermediate progress.
     complete: v.optional(v.boolean()),
+    // Tags a message whose body is copyable draft output meant to be used
+    // elsewhere (e.g. "draft.application" for job application framing). GET
+    // /messages turns it into a "draft" card with a one-tap copy. Absent on
+    // ordinary messages.
+    kind: v.optional(v.string()),
   })
     .index("by_conversation", ["conversationId"])
     .index("by_conversation_turn", ["conversationId", "turnId"])

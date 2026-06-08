@@ -65,7 +65,13 @@ export function actionCardFor(action: PendingAction): ActionCard {
 // Execute the drafted action. Dispatch by kind; reuses the real capability
 // (reminder add goes through submitReminderAdd, with its date guard + requestId
 // confirm). Shared by the "yes" reply gate and the approve endpoint.
-export async function executeAction(action: PendingAction): Promise<{ ok: boolean; reply: string }> {
+//
+// messageKind (optional) tags the persisted confirmation message so GET
+// /messages can render it as something other than plain prose — e.g. job draft
+// output comes back as "draft.application" so the app shows a copyable block.
+export async function executeAction(
+  action: PendingAction,
+): Promise<{ ok: boolean; reply: string; messageKind?: string }> {
   switch (action.kind) {
     case "reminder.add": {
       let req: { title: string; dueISO: string; list: string; amount?: string | null };
@@ -86,8 +92,10 @@ export async function executeAction(action: PendingAction): Promise<{ ok: boolea
       } catch {
         return { ok: false, reply: "That job draft was malformed; nothing was drafted." };
       }
-      // Drafts framing for Charlie to use — NEVER applies or sends.
-      return draftApplicationFraming(j);
+      // Drafts framing for Charlie to use — NEVER applies or sends. On success
+      // tag the message as draft output so the app renders a copyable block.
+      const res = await draftApplicationFraming(j);
+      return res.ok ? { ...res, messageKind: "draft.application" } : res;
     }
     default:
       return { ok: false, reply: `Don't know how to execute action kind "${action.kind}".` };
@@ -112,6 +120,7 @@ export async function approvePendingAction(
     role: "assistant",
     content: result.reply,
     complete: true,
+    ...(result.messageKind ? { kind: result.messageKind } : {}),
   });
   return result;
 }
