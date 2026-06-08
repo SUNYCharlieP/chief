@@ -682,6 +682,31 @@ async function processAppTurn(
     }
   } catch (err) {
     console.error(`[app] background turn for ${conversationId} failed:`, err);
+    // Don't leave the app spinning forever (the working animation runs until it
+    // polls a complete=true reply). Persist a terminal failure reply so the
+    // animation stops and Charlie gets actionable feedback, then push. Both are
+    // best-effort and self-guarded: this handler must never throw, and the
+    // persist itself can fail if the backend (Convex) is still down — in which
+    // case the app falls back to its poll deadline as before.
+    const failureReply =
+      "Something glitched on my end and I couldn't finish that (a backend hiccup). Please try again.";
+    try {
+      await convexClient.mutation(convexApi.messages.send, {
+        conversationId,
+        role: "assistant",
+        content: failureReply,
+        complete: true,
+      });
+    } catch (persistErr) {
+      console.error(`[app] could not persist failure reply for ${conversationId}:`, persistErr);
+    }
+    if (apnsConfigured()) {
+      try {
+        await sendPush("Chief", failureReply, undefined, { event: "turn_complete", conversationId });
+      } catch (pushErr) {
+        console.error(`[app] failure push for ${conversationId} failed:`, pushErr);
+      }
+    }
   }
 }
 
