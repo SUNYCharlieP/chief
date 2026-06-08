@@ -75,10 +75,11 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   const ok = isValid(presented);
   const state = presented ? (ok ? "valid" : "INVALID") : "missing";
 
+  const ip = req.ip ?? req.socket.remoteAddress ?? "?";
   if (mode === "require") {
     if (!ok) {
-      // Log the path + token state (never the token value).
-      console.warn(`[auth] 401 ${req.method} ${req.path} — token ${state}`);
+      // Log the path + token state + client IP (never the token value).
+      console.warn(`[auth] 401 ${req.method} ${req.path} — token ${state} (${ip})`);
       res.status(401).json({ error: "unauthorized" });
       return;
     }
@@ -88,7 +89,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
   // accept (soft launch): allow through, but log so the app's auth can be
   // confirmed before flipping to require.
-  console.log(`[auth] soft ${req.method} ${req.path} — token ${state}`);
+  console.log(`[auth] soft ${req.method} ${req.path} — token ${state} (${ip})`);
   next();
 }
 
@@ -103,10 +104,11 @@ export function wsAuthAllowed(req: IncomingMessage): boolean {
   const presented = m ? m[1].trim() : null;
   const ok = isValid(presented);
   const state = presented ? (ok ? "valid" : "INVALID") : "missing";
+  const ip = req.socket.remoteAddress ?? "?";
   if (mode === "require") {
-    if (!ok) console.warn(`[auth] WS reject — token ${state}`);
+    if (!ok) console.warn(`[auth] WS reject — token ${state} (${ip})`);
     return ok;
   }
-  console.log(`[auth] soft WS — token ${state}`);
+  console.log(`[auth] soft WS — token ${state} (${ip})`);
   return true;
 }
