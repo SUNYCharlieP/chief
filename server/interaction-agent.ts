@@ -247,6 +247,9 @@ interface HandleOpts {
   persistAssistantReply?: boolean;
   images?: Array<{ storageId: string; mediaType: string }>;
   mediaError?: string;
+  // /retry re-runs an existing turn: the inbound message is already in the
+  // thread, so skip re-persisting it (avoids a duplicate user echo).
+  skipPersistInbound?: boolean;
 }
 
 function randomId(prefix: string): string {
@@ -319,21 +322,24 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
 
   const inboundRole = opts.kind === "proactive" ? "system" : "user";
   const inboundImageStorageIds = (opts.images ?? []).map((i) => i.storageId);
-  await convex.mutation(api.messages.send, {
-    conversationId: opts.conversationId,
-    role: inboundRole,
-    content: opts.content,
-    turnId,
-    // TODO(codegen): drop cast once schema push regenerates Convex API.
-    imageStorageIds: inboundImageStorageIds.length > 0
-      ? (inboundImageStorageIds as never)
-      : undefined,
-    mediaError: opts.mediaError,
-  });
-  broadcast(opts.kind === "proactive" ? "proactive_notice" : "user_message", {
-    conversationId: opts.conversationId,
-    content: opts.content,
-  });
+  // /retry re-runs an already-persisted turn — don't echo the inbound again.
+  if (!opts.skipPersistInbound) {
+    await convex.mutation(api.messages.send, {
+      conversationId: opts.conversationId,
+      role: inboundRole,
+      content: opts.content,
+      turnId,
+      // TODO(codegen): drop cast once schema push regenerates Convex API.
+      imageStorageIds: inboundImageStorageIds.length > 0
+        ? (inboundImageStorageIds as never)
+        : undefined,
+      mediaError: opts.mediaError,
+    });
+    broadcast(opts.kind === "proactive" ? "proactive_notice" : "user_message", {
+      conversationId: opts.conversationId,
+      content: opts.content,
+    });
+  }
 
   // Draft-and-ask consent gate (deterministic, pre-LLM). If a skill draft is
   // pending in this conversation, "show" reveals it and an allowlisted

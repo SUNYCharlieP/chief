@@ -2,6 +2,26 @@ import { convex } from "./convex-client.js";
 import { api } from "../convex/_generated/api.js";
 import { runJobObserver } from "./job-observer.js";
 import { runMorningSurface } from "./morning-scan.js";
+import { handleUserMessage } from "./interaction-agent.js";
+
+// The most recent genuine user turn (skipping slash commands like /retry, /jobs)
+// so /retry re-runs the real message, not a command. Returns its text + any
+// images it carried, or null if there's nothing to retry.
+async function lastRealUserMessage(
+  conversationId: string,
+): Promise<{ content: string; imageStorageIds?: string[] } | null> {
+  const rows = await convex.query(api.messages.list, { conversationId, limit: 30 }); // newest first
+  for (const m of rows) {
+    if (
+      m.role === "user" &&
+      m.content.trim().length > 0 &&
+      !m.content.trimStart().startsWith("/")
+    ) {
+      return { content: m.content, imageStorageIds: m.imageStorageIds as string[] | undefined };
+    }
+  }
+  return null;
+}
 
 // Slash commands for the app channel. An app:charlie message that starts with
 // "/" is parsed here and routed to a handler INSTEAD of the LLM. Adding a
@@ -41,6 +61,26 @@ const COMMANDS: Record<string, Command> = {
       const r = await runMorningSurface();
       if (r.error) return `Couldn't send the briefing: ${r.error}`;
       return "Briefing sent ↑";
+    },
+  },
+  retry: {
+    description: "re-run the last turn",
+    run: async (_args, conversationId) => {
+      const target = await lastRealUserMessage(conversationId);
+      if (!target) return "Nothing to retry yet.";
+      const images = (target.imageStorageIds ?? []).map((id) => ({
+        storageId: id,
+        mediaType: "image/jpeg", // only storageId is used; bytes' real type is read at fetch
+      }));
+      // Re-run the real turn: skip re-persisting the inbound (it's already in the
+      // thread) and let handleSlashCommand persist the single returned reply.
+      return handleUserMessage({
+        conversationId,
+        content: target.content,
+        images: images.length > 0 ? images : undefined,
+        skipPersistInbound: true,
+        persistAssistantReply: false,
+      });
     },
   },
   // --- Seam for future commands (args already parsed) -----------------------
