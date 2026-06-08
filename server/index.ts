@@ -470,6 +470,9 @@ async function main() {
         // it polls a complete=true assistant message (poll-reliable, independent
         // of push). Absent/false on intermediate progress messages.
         complete: r.complete ?? false,
+        // Carried through so enrichMessage can turn a draft-tagged message into a
+        // copy card; the app ignores the field itself.
+        kind: r.kind,
       }));
       if (since != null && !Number.isNaN(since)) {
         messages = messages.filter((m) => m.at > since);
