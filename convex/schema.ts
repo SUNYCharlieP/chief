@@ -1,5 +1,51 @@
 import { defineSchema, defineTable } from "convex/server";
-import { v } from "convex/values";
+import { v, type Validator } from "convex/values";
+import {
+  COMPARATORS,
+  GOAL_PERIODS,
+  HABIT_METRIC_KEYS,
+  HABIT_SOURCE_TYPES,
+  HABIT_STATUSES,
+} from "./habits/streak";
+
+// Build a `v.union(v.literal(...))` validator straight from a canonical tuple
+// in streak.ts, preserving the literal member type. This is what keeps the DB
+// validator and the pure-core types single-source: the literal strings are
+// declared exactly once (in streak.ts), and both the TypeScript types and the
+// Convex validators below are derived from the same tuples. Adding/removing a
+// value happens in one place and can never drift.
+function literalUnion<T extends readonly [string, string, ...string[]]>(
+  values: T,
+): Validator<T[number]> {
+  const members = values.map((value) => v.literal(value));
+  return v.union(
+    ...(members as [Validator<string>, Validator<string>, ...Validator<string>[]]),
+  ) as unknown as Validator<T[number]>;
+}
+
+// Closed metric set (sleep_duration | wake_time | mindful_minutes | steps |
+// resting_hr). There is no weight/calorie/intake literal, so an intake habit
+// is structurally unconstructable — the validator rejects it at write time.
+const habitMetricValidator = literalUnion(HABIT_METRIC_KEYS);
+const comparatorValidator = literalUnion(COMPARATORS);
+const goalPeriodValidator = literalUnion(GOAL_PERIODS);
+const habitStatusValidator = literalUnion(HABIT_STATUSES);
+
+// Auto sources (Oura / HealthKit) share the same metric+comparator+threshold
+// shape; manual sources carry no metric. threshold is a plain number in the
+// metric's own unit — for wake_time that is minutes past local midnight, so
+// "by 07:00" is threshold 420 with comparator "lte" (see streak.ts).
+const autoSourceFields = {
+  metric: habitMetricValidator,
+  comparator: comparatorValidator,
+  threshold: v.number(),
+};
+
+const habitSourceValidator = v.union(
+  v.object({ type: v.literal(HABIT_SOURCE_TYPES[0]) }), // "manual"
+  v.object({ type: v.literal(HABIT_SOURCE_TYPES[1]), ...autoSourceFields }), // "oura-auto"
+  v.object({ type: v.literal(HABIT_SOURCE_TYPES[2]), ...autoSourceFields }), // "healthkit-auto"
+);
 
 export default defineSchema({
   messages: defineTable({
@@ -498,4 +544,40 @@ export default defineSchema({
     date: v.string(),
     surfacedAt: v.number(),
   }).index("by_dedup_key", ["dedupKey"]),
+
+  // Habit tracker — Phase 1. Behavioral habits only: the closed metric union
+  // on `source` (derived from HABIT_METRIC_KEYS) has no weight/calorie/intake
+  // member, so an intake habit cannot be written. `source` is a discriminated
+  // union — manual habits carry no metric; oura-auto / healthkit-auto carry a
+  // metric + comparator + threshold (threshold is in the metric's own unit;
+  // wake_time is minutes past local midnight). weeklyTarget applies only when
+  // goalPeriod is "weekly". archivedAt soft-deletes without losing history.
+  habits: defineTable({
+    name: v.string(),
+    icon: v.string(),
+    goalPeriod: goalPeriodValidator,
+    weeklyTarget: v.optional(v.number()),
+    source: habitSourceValidator,
+    archivedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_archived", ["archivedAt"]),
+
+  // One row per habit per day. `status` is the three-state enum from
+  // streak.ts: "completed" | "missed" | "unknown". The not-synced invariant
+  // lives here — a not-yet-reported auto metric is "unknown" with no `value`
+  // and no `resolvedAt`; a reported failure is "missed" and ALWAYS carries
+  // evidence (`value` + `resolvedAt`). A missing row is treated as "unknown"
+  // by the streak walker, so absence is never a miss. `date` is the local
+  // calendar day "YYYY-MM-DD"; `value` is the metric reading for auto sources
+  // (e.g. minutes-past-midnight for wake_time).
+  habitLog: defineTable({
+    habitId: v.id("habits"),
+    date: v.string(),
+    status: habitStatusValidator,
+    value: v.optional(v.number()),
+    resolvedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_habit_and_date", ["habitId", "date"])
+    .index("by_date", ["date"]),
 });
