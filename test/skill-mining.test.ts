@@ -130,66 +130,96 @@ describe("extractSignature — Stage 1 session signature", () => {
     const sig = extractSignature("s1", [user("go"), bash("convex deploy", true)]);
     expect(sig.tokens).not.toContain("cmd:convex:deploy");
   });
+
+  it("builds an ordered command sequence for n-gram mining", () => {
+    const sig = extractSignature("s1", [
+      user("ship"),
+      bash("cd ~/app && agvtool new-version -all 23"),
+      bash("xcrun altool --upload-app -f x.ipa"),
+    ]);
+    expect(sig.sequence).toEqual(["cmd:agvtool:new-version", "cmd:altool:upload-app"]);
+  });
+
+  it("redacts secrets in gist + steps that feed the model (the n-gram path too)", () => {
+    const sig = extractSignature("s1", [
+      user("deploy with sk-live-supersecretkey0000abcd"),
+      bash("curl -H 'Authorization: Bearer abc123def456ghi789jkl012mno345pqr678' https://api.x.com"),
+    ]);
+    expect(sig.gist).not.toContain("supersecretkey");
+    expect(sig.steps.join(" ")).not.toContain("abc123def456ghi789jkl012mno345pqr678");
+    expect(sig.sequence).toEqual(["cmd:curl"]); // only the allowlisted program tokenizes
+  });
 });
 
-// terse signature builder for Stage 2/3 tests
-const sig = (sessionId: string, tokens: string[]): SessionSignature => ({
+// terse signature builder for Stage 2/3 tests — the array IS the ordered sequence
+const sig = (sessionId: string, sequence: string[]): SessionSignature => ({
   sessionId,
   gist: `gist ${sessionId}`,
-  tokens,
+  tokens: [...new Set(sequence)],
+  sequence,
   steps: [`step ${sessionId}`],
 });
 
-describe("clusterCandidates — Stage 2 = GATE 1 (>= 2 distinct sessions)", () => {
-  it("does NOT propose a workflow seen in only one session", () => {
+describe("clusterCandidates — Stage 2 = GATE 1 (recurring ordered n-grams, >= 2 sessions)", () => {
+  it("does NOT propose a run seen in only one session", () => {
     const out = clusterCandidates([
       sig("a", ["cmd:xcodebuild:archive", "cmd:altool:upload-app"]),
       sig("b", ["cmd:git:commit"]),
     ]);
-    // archive+upload appear once (session a), git:commit once (session b) -> none recur
     expect(out).toEqual([]);
   });
 
-  it("proposes a candidate when an anchor command recurs across >= 2 sessions", () => {
-    const out = clusterCandidates([
-      sig("a", ["cmd:xcodebuild:archive", "cmd:altool:upload-app", "cmd:agvtool:new-version"]),
-      sig("b", ["cmd:xcodebuild:archive", "cmd:altool:upload-app", "cmd:agvtool:new-version"]),
-    ]);
+  it("proposes a candidate for a run recurring across >= 2 sessions, preserving order", () => {
+    const run = ["cmd:agvtool:new-version", "cmd:xcodebuild:archive", "cmd:altool:upload-app"];
+    const out = clusterCandidates([sig("a", run), sig("b", run)]);
     expect(out).toHaveLength(1);
     expect(out[0].occurrences).toBe(2);
-    expect(out[0].tokens).toContain("cmd:xcodebuild:archive");
-    expect(out[0].tokens).toContain("cmd:altool:upload-app");
+    expect(out[0].tokens).toEqual(run); // ordered run, not a bag
   });
 
-  it("only attaches co-tokens present in >= half the anchor's sessions", () => {
+  it("keeps the MAXIMAL run and drops a sub-run over the same sessions", () => {
+    const long = [
+      "cmd:agvtool:new-version", "cmd:xcodebuild:archive", "cmd:xcodebuild", "cmd:altool:upload-app",
+    ];
+    const out = clusterCandidates([sig("a", long), sig("b", long)]);
+    expect(out).toHaveLength(1); // every sub-run shares {a,b} -> only the maximal survives
+    expect(out[0].tokens).toEqual(long);
+  });
+
+  it("keeps a shorter run that recurs in MORE sessions than the long one", () => {
+    const long = ["cmd:git:commit", "cmd:git:push", "cmd:xcodebuild:archive"];
+    const out = clusterCandidates([
+      sig("a", long),
+      sig("b", long),
+      sig("c", ["cmd:git:commit", "cmd:git:push"]), // commit→push also stands alone here
+    ]);
+    const commitPush = out.find((c) => c.tokens.join() === "cmd:git:commit,cmd:git:push");
+    expect(commitPush?.occurrences).toBe(3); // appears in a session the long run doesn't
+  });
+
+  it("treats different orderings as different runs", () => {
     const out = clusterCandidates([
       sig("a", ["cmd:git:commit", "cmd:git:push"]),
-      sig("b", ["cmd:git:commit", "cmd:git:push"]),
-      sig("c", ["cmd:git:commit"]), // git:push only in 2/3 sessions -> half=2, included
-      sig("d", ["cmd:git:commit", "cmd:vitest:run"]), // vitest in 1/4 -> excluded
+      sig("b", ["cmd:git:push", "cmd:git:commit"]),
     ]);
-    const anchor = out.find((c) => c.anchor === "cmd:git:commit");
-    expect(anchor).toBeTruthy();
-    expect(anchor!.occurrences).toBe(4);
-    expect(anchor!.tokens).toContain("cmd:git:push"); // 2/4 >= half(2)
-    expect(anchor!.tokens).not.toContain("cmd:vitest:run"); // 1/4 < half
+    expect(out).toEqual([]); // neither order recurs across two sessions
+  });
+
+  it("separates two distinct workflows that don't share sessions", () => {
+    const out = clusterCandidates([
+      sig("a", ["cmd:xcodebuild:archive", "cmd:altool:upload-app"]),
+      sig("b", ["cmd:xcodebuild:archive", "cmd:altool:upload-app"]),
+      sig("c", ["cmd:convex:run", "cmd:convex:data"]),
+      sig("d", ["cmd:convex:run", "cmd:convex:data"]),
+    ]);
+    expect(out).toHaveLength(2);
   });
 
   it("respects the maxCandidates cap", () => {
-    const sigs = [
-      sig("a", ["cmd:one", "cmd:two", "cmd:three"]),
-      sig("b", ["cmd:one", "cmd:two", "cmd:three"]),
-    ];
-    const out = clusterCandidates(sigs, { maxCandidates: 1 });
-    expect(out.length).toBe(1);
-  });
-
-  it("never anchors on a non-command (file/path) token", () => {
-    const out = clusterCandidates([
-      sig("a", ["file:.ts", "path:server"]),
-      sig("b", ["file:.ts", "path:server"]),
-    ]);
-    expect(out).toEqual([]); // recurring, but no cmd anchor -> no candidate
+    const r1 = ["cmd:git:commit", "cmd:git:push"];
+    const r2 = ["cmd:convex:run", "cmd:convex:data"];
+    const out = clusterCandidates([sig("a", r1), sig("b", r1), sig("c", r2), sig("d", r2)], { maxCandidates: 1 });
+    expect(out).toHaveLength(1);
   });
 });
 

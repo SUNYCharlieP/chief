@@ -66,8 +66,9 @@ function clip(s: string, n: number): string {
 export interface SessionSignature {
   sessionId: string;
   gist: string; // truncated first real user prompt — the intent
-  tokens: string[]; // normalized action tokens, deduped
-  steps: string[]; // a few representative shell steps (truncated)
+  tokens: string[]; // deduped action tokens (cmd + file/path) — context + filter
+  sequence: string[]; // ORDERED cmd-token run, adjacent dups collapsed — for n-grams
+  steps: string[]; // a few representative shell steps (redacted, truncated)
 }
 
 // Normalize a bash command into a stable "prog" or "prog:subcommand" token.
@@ -110,16 +111,21 @@ function splitCommands(cmd: string): string[] {
   return kept.join("\n").split(/\s*(?:&&|\|\||;|\n)\s*/);
 }
 
-// Tokenize every command in a (possibly chained) Bash invocation. Recovers the
-// real command behind a leading `cd …`, but emits ONLY allowlisted programs —
-// so the token space can't fill with code fragments, secrets, or PII.
-export function commandTokens(cmd: string): string[] {
-  const out = new Set<string>();
+// Allowlisted program tokens in EXECUTION ORDER (for sequence/n-gram mining).
+// Recovers the real command behind a leading `cd …`, but emits ONLY allowlisted
+// programs — so the token space can't fill with code fragments, secrets, or PII.
+export function orderedTokens(cmd: string): string[] {
+  const out: string[] = [];
   for (const seg of splitCommands(cmd)) {
     const tok = normalizeCommand(seg);
-    if (tok && KNOWN_PROGRAMS.has(tok.split(":")[0].toLowerCase())) out.add(tok);
+    if (tok && KNOWN_PROGRAMS.has(tok.split(":")[0].toLowerCase())) out.push(tok);
   }
-  return [...out];
+  return out;
+}
+
+// Deduped set of the same tokens (bag) — for the "has any action" filter.
+export function commandTokens(cmd: string): string[] {
+  return [...new Set(orderedTokens(cmd))];
 }
 
 // Redact secrets/PII before anything reaches the model bundle or persistence.
@@ -137,6 +143,7 @@ export function redact(s: string): string {
 export function extractSignature(sessionId: string, lines: LogLine[]): SessionSignature {
   let gist = "";
   const tokens = new Set<string>();
+  const sequence: string[] = [];
   const steps: string[] = [];
 
   for (const line of lines) {
@@ -169,9 +176,14 @@ export function extractSignature(sessionId: string, lines: LogLine[]): SessionSi
       if (name === "Bash") {
         const cmd = b.input?.command;
         if (typeof cmd === "string") {
-          const toks = commandTokens(cmd);
-          for (const tok of toks) tokens.add(`cmd:${tok}`);
-          if (toks.length > 0 && steps.length < 8) steps.push(clip(redact(cmd.replace(/\s+/g, " ")), 90));
+          const ordered = orderedTokens(cmd);
+          for (const tok of ordered) {
+            tokens.add(`cmd:${tok}`);
+            const ct = `cmd:${tok}`;
+            // ordered run, collapse adjacent dups, cap length to bound n-grams
+            if (sequence.length < 60 && sequence[sequence.length - 1] !== ct) sequence.push(ct);
+          }
+          if (ordered.length > 0 && steps.length < 8) steps.push(clip(redact(cmd.replace(/\s+/g, " ")), 90));
         }
       } else if (name === "Edit" || name === "Write" || name === "NotebookEdit") {
         const fp = b.input?.file_path;
@@ -185,7 +197,7 @@ export function extractSignature(sessionId: string, lines: LogLine[]): SessionSi
     }
   }
 
-  return { sessionId, gist, tokens: [...tokens], steps };
+  return { sessionId, gist, tokens: [...tokens], sequence, steps };
 }
 
 // ---- Stage 2: clustering = GATE 1 (pure) ------------------------------------
@@ -193,15 +205,31 @@ export function extractSignature(sessionId: string, lines: LogLine[]): SessionSi
 export interface Candidate {
   patternKey: string;
   anchor: string;
-  tokens: string[]; // anchor + co-occurring recurring tokens
-  sessions: string[]; // distinct sessions (occurrences)
+  tokens: string[]; // the ordered command RUN (the n-gram)
+  sessions: string[]; // distinct sessions containing the run (occurrences)
   occurrences: number;
 }
 
-// Anchor each candidate on a recurring cmd: token, attach the recurring tokens
-// that co-occur in at least half its sessions, then dedup + subsume + cap.
-// GATE 1 lives here: only signatures in >= minOccurrences DISTINCT sessions
-// survive, and the model is never invoked on anything that didn't.
+const NGRAM_MIN = 2; // a workflow is at least two steps
+const NGRAM_MAX = 6;
+
+// Is `small` a contiguous sub-run of `big`?
+function isSubrun(small: string[], big: string[]): boolean {
+  if (small.length > big.length) return false;
+  outer: for (let i = 0; i + small.length <= big.length; i++) {
+    for (let j = 0; j < small.length; j++) if (big[i + j] !== small[j]) continue outer;
+    return true;
+  }
+  return false;
+}
+
+// Stage 2 = GATE 1, SEQUENCE-based. A workflow is an ORDERED run of commands, so
+// we mine recurring contiguous n-grams (length 2..MAX) of each session's command
+// sequence. GATE 1: keep only runs recurring in >= minOccurrences DISTINCT
+// sessions — the model never sees a run that didn't repeat. Then keep MAXIMAL
+// runs (drop a sub-run covered by a longer recurring run over the same sessions)
+// and cap. Session-level co-occurrence can't separate workflows that share a
+// session; an ordered n-gram can.
 export function clusterCandidates(
   signatures: SessionSignature[],
   opts: { minOccurrences?: number; maxCandidates?: number } = {},
@@ -209,59 +237,64 @@ export function clusterCandidates(
   const minOcc = opts.minOccurrences ?? MIN_OCCURRENCES;
   const maxCandidates = opts.maxCandidates ?? MAX_CANDIDATES;
 
-  const tokenSessions = new Map<string, Set<string>>();
-  const sigById = new Map<string, Set<string>>();
+  const gramSessions = new Map<string, Set<string>>();
+  const gramTokens = new Map<string, string[]>();
   for (const s of signatures) {
-    const set = new Set(s.tokens);
-    sigById.set(s.sessionId, set);
-    for (const tok of set) {
-      let bag = tokenSessions.get(tok);
-      if (!bag) tokenSessions.set(tok, (bag = new Set()));
-      bag.add(s.sessionId);
-    }
-  }
-
-  const recurring = new Set(
-    [...tokenSessions].filter(([, set]) => set.size >= minOcc).map(([t]) => t),
-  );
-  const anchors = [...recurring].filter((t) => t.startsWith("cmd:"));
-
-  const candidates: Candidate[] = [];
-  for (const anchor of anchors) {
-    const sessions = [...(tokenSessions.get(anchor) ?? [])];
-    if (sessions.length < minOcc) continue;
-    const coCount = new Map<string, number>();
-    for (const sid of sessions) {
-      for (const tok of sigById.get(sid) ?? []) {
-        if (tok !== anchor && recurring.has(tok)) coCount.set(tok, (coCount.get(tok) ?? 0) + 1);
+    const seq = s.sequence;
+    const seenThisSession = new Set<string>();
+    for (let len = NGRAM_MIN; len <= NGRAM_MAX; len++) {
+      for (let i = 0; i + len <= seq.length; i++) {
+        const gram = seq.slice(i, i + len);
+        const key = gram.join(" » ");
+        if (seenThisSession.has(key)) continue; // a session counts once per run
+        seenThisSession.add(key);
+        let bag = gramSessions.get(key);
+        if (!bag) {
+          gramSessions.set(key, (bag = new Set()));
+          gramTokens.set(key, gram);
+        }
+        bag.add(s.sessionId);
       }
     }
-    const half = Math.ceil(sessions.length / 2);
-    const coTokens = [...coCount].filter(([, c]) => c >= half).map(([t]) => t).sort();
-    const tokens = [anchor, ...coTokens];
-    candidates.push({
-      patternKey: `claude:${createHash("sha1").update(tokens.join("|")).digest("hex").slice(0, 12)}`,
-      anchor,
-      tokens,
-      sessions: sessions.sort(),
-      occurrences: sessions.length,
-    });
   }
 
-  candidates.sort((a, b) => b.occurrences - a.occurrences || a.anchor.localeCompare(b.anchor));
-  const kept: Candidate[] = [];
-  for (const c of candidates) {
-    if (kept.some((k) => k.tokens.join("|") === c.tokens.join("|"))) continue;
+  const grams = [...gramSessions.entries()]
+    .filter(([, set]) => set.size >= minOcc)
+    .map(([key, set]) => ({
+      key,
+      tokens: gramTokens.get(key)!,
+      sessions: [...set].sort(),
+      occurrences: set.size,
+    }));
+
+  // Process longest/most-frequent first; drop a run that is a sub-run of an
+  // already-kept run over (mostly) the same sessions — keeps the maximal run.
+  grams.sort(
+    (a, b) => b.tokens.length - a.tokens.length || b.occurrences - a.occurrences || a.key.localeCompare(b.key),
+  );
+  const kept: typeof grams = [];
+  for (const g of grams) {
     const subsumed = kept.some((k) => {
+      if (!isSubrun(g.tokens, k.tokens)) return false;
       const ks = new Set(k.sessions);
       let overlap = 0;
-      for (const s of c.sessions) if (ks.has(s)) overlap++;
-      return overlap / c.sessions.length >= SUBSUME_OVERLAP;
+      for (const sid of g.sessions) if (ks.has(sid)) overlap++;
+      return overlap / g.sessions.length >= SUBSUME_OVERLAP;
     });
-    if (subsumed) continue;
-    kept.push(c);
+    if (!subsumed) kept.push(g);
   }
-  return kept.slice(0, maxCandidates);
+
+  // Final ranking for the cap: frequency first, then specificity.
+  kept.sort(
+    (a, b) => b.occurrences - a.occurrences || b.tokens.length - a.tokens.length || a.key.localeCompare(b.key),
+  );
+  return kept.slice(0, maxCandidates).map((g) => ({
+    patternKey: `claude:${createHash("sha1").update(g.key).digest("hex").slice(0, 12)}`,
+    anchor: g.tokens[0],
+    tokens: g.tokens,
+    sessions: g.sessions,
+    occurrences: g.occurrences,
+  }));
 }
 
 // ---- Stage 3: model scoring = GATE 2 ----------------------------------------
@@ -288,17 +321,18 @@ coding-assistant session logs, and decide which are real, reusable workflows
 worth capturing as a "skill" (a short reusable playbook the assistant can follow
 next time).
 
-You receive a JSON array of candidates. Each has: patternKey, signals
-(normalized action tokens that recurred across sessions), occurrences (how many
-DISTINCT sessions), and up to 3 examples (the user's intent gist + representative
-shell steps).
+You receive a JSON array of candidates. Each has: patternKey, sequence (an
+ORDERED run of commands that recurred across multiple sessions), occurrences
+(how many DISTINCT sessions ran it), and up to 3 examples (the user's intent
+gist + representative shell steps).
 
 For EACH candidate, return one object with exactly these fields:
   "patternKey": echo it back unchanged
-  "isReusableWorkflow": boolean — true ONLY if the signals describe a coherent,
-     repeatable multi-step procedure worth writing down (e.g. "archive, bump
-     build number, export, upload to TestFlight"). false for incidental
-     co-occurrence, one-off debugging, or generic editing/searching.
+  "isReusableWorkflow": boolean — true ONLY if the ordered sequence is a
+     coherent, repeatable procedure worth writing down (e.g. "agvtool bump →
+     xcodebuild archive → export → altool upload"). false for an incidental run
+     of unrelated commands, one-off debugging, or a generic edit/build/commit
+     that isn't a distinctive workflow.
   "confidence": number 0..1 — your confidence it is a real reusable workflow.
   "skillTitle": short imperative title, e.g. "Ship a TestFlight build".
   "skillEntry": a concise Skills.md entry — a single "### <title>" markdown
@@ -310,15 +344,18 @@ Be conservative: when in doubt, low confidence. Output ONLY the JSON array.`;
 
 interface Bundle {
   patternKey: string;
-  signals: string[];
+  sequence: string[];
   occurrences: number;
   examples: { gist: string; steps: string[] }[];
 }
 
+// The ONLY things that reach the model: the ordered run (allowlisted program
+// tokens — no secrets possible) and example gist/steps that were redacted at
+// extraction time. No raw log content crosses this boundary.
 function buildBundles(candidates: Candidate[], sigById: Map<string, SessionSignature>): Bundle[] {
   return candidates.map((c) => ({
     patternKey: c.patternKey,
-    signals: c.tokens,
+    sequence: c.tokens,
     occurrences: c.occurrences,
     examples: c.sessions.slice(0, 3).map((sid) => {
       const sig = sigById.get(sid);
