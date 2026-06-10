@@ -36,6 +36,7 @@ import { convex as convexClient } from "./convex-client.js";
 import { getUserTimezone } from "./timezone-config.js";
 import { daysBetween } from "../convex/habits/streak.js";
 import { runStreakNudges } from "./habits-brief.js";
+import { computeUsageStats } from "./claude-usage.js";
 import { handleUserMessage } from "./interaction-agent.js";
 import { loadIntegrations } from "./integrations/registry.js";
 import { startCleanupLoop } from "./memory/clean.js";
@@ -646,6 +647,18 @@ async function main() {
     try {
       await convexClient.mutation(convexApi.habits.functions.archive, { habitId });
       res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Claude Code usage stats (JAR-19), aggregated from the local ~/.claude
+  // session logs. Read-only display feed for the app's usage card — NOT a habit
+  // (no setDay/metric/log). mtime-cached so it doesn't reparse ~2k log files per
+  // request. America/New_York day/hour buckets, same tz discipline as habits.
+  app.get("/usage", (_req, res) => {
+    try {
+      res.json(computeUsageStats());
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
