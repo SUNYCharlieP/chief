@@ -24,8 +24,9 @@ function literalUnion<T extends readonly [string, string, ...string[]]>(
 }
 
 // Closed metric set (sleep_duration | wake_time | mindful_minutes | steps |
-// resting_hr). There is no weight/calorie/intake literal, so an intake habit
-// is structurally unconstructable — the validator rejects it at write time.
+// resting_hr | water). `water` (dietaryWater) is the one sanctioned intake
+// metric; there is still no weight/calorie/generic-intake literal, so those
+// habits stay unconstructable — the validator rejects them at write time.
 const habitMetricValidator = literalUnion(HABIT_METRIC_KEYS);
 const comparatorValidator = literalUnion(COMPARATORS);
 const goalPeriodValidator = literalUnion(GOAL_PERIODS);
@@ -548,8 +549,9 @@ export default defineSchema({
   }).index("by_dedup_key", ["dedupKey"]),
 
   // Habit tracker — Phase 1. Behavioral habits only: the closed metric union
-  // on `source` (derived from HABIT_METRIC_KEYS) has no weight/calorie/intake
-  // member, so an intake habit cannot be written. `source` is a discriminated
+  // on `source` (derived from HABIT_METRIC_KEYS) admits only water as an intake
+  // metric — no weight/calorie member — so those habits cannot be written.
+  // `source` is a discriminated
   // union — manual habits carry no metric; oura-auto / healthkit-auto carry a
   // metric + comparator + threshold (threshold is in the metric's own unit;
   // wake_time is minutes past local midnight). weeklyTarget applies only when
@@ -562,6 +564,10 @@ export default defineSchema({
     source: habitSourceValidator,
     archivedAt: v.optional(v.number()),
     createdAt: v.number(),
+    // User-arranged order on the tracker. Optional: a habit with no sortOrder
+    // (never reordered, or created after the last reorder) sorts after placed
+    // ones by createdAt. A reorder assigns 0..n across all active habits.
+    sortOrder: v.optional(v.number()),
   }).index("by_archived", ["archivedAt"]),
 
   // One row per habit per day. `status` is the three-state enum from

@@ -13,9 +13,10 @@
 //     value for auto sources. Manual habits have no value — their evidence is
 //     the user's explicit answer (resolvedAt alone). A not-yet-synced auto
 //     metric resolves to "unknown", never a miss.
-//   * The set of auto metrics is CLOSED (HABIT_METRICS below). There is no
-//     weight / calorie / intake metric, so an intake habit is structurally
-//     unconstructable — the type does not admit one. This is the guardrail.
+//   * The set of auto metrics is CLOSED (HABIT_METRICS below). `water`
+//     (dietaryWater) is the one sanctioned intake metric (JAR-17); the
+//     guardrail still admits NO weight / calorie / generic-intake metric, so
+//     those habits stay structurally unconstructable — the type rejects them.
 
 // Canonical literal tuples. These are the single source of truth for every
 // closed enum in the feature. The Convex schema (schema.ts) builds its
@@ -41,10 +42,15 @@ export const HABIT_METRIC_KEYS = [
   "mindful_minutes",
   "steps",
   "resting_hr",
+  "water",
 ] as const;
 
 export type HabitMetric = (typeof HABIT_METRIC_KEYS)[number];
 
+// `water` is stored/compared in MILLILITERS (HealthKit's dietaryWater volume),
+// gte goal; the app converts the user's oz input to mL for the threshold and
+// displays readings back in oz. Keeping one storage unit (mL) end to end means
+// the generic value>=threshold comparison needs no per-metric unit logic.
 export const HABIT_METRICS: Record<
   HabitMetric,
   { unit: string; comparator: Comparator; label: string }
@@ -54,6 +60,7 @@ export const HABIT_METRICS: Record<
   mindful_minutes: { unit: "minutes", comparator: "gte", label: "Mindful minutes" },
   steps: { unit: "count", comparator: "gte", label: "Steps" },
   resting_hr: { unit: "bpm", comparator: "lte", label: "Resting heart rate" },
+  water: { unit: "mL", comparator: "gte", label: "Water" },
 };
 
 export const DEFAULT_FLAME_THRESHOLDS = [3, 7, 30, 100] as const;

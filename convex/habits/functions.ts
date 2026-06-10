@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "../_generated/server";
 import { habitSourceValidator } from "../schema";
-import { summarizeHabit, habitDetail } from "./summary";
+import { summarizeHabit, habitDetail, sortHabits } from "./summary";
 import { isWithinRepairWindow, resolveMetricRow } from "./streak";
 
 // Habit tracker — Phase 3 (JAR-3) persistence bridge: list / create /
@@ -26,10 +26,11 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     assertDateKey("today", args.today);
-    const habits = await ctx.db
+    const unsorted = await ctx.db
       .query("habits")
       .withIndex("by_archived", (q) => q.eq("archivedAt", undefined))
       .take(100);
+    const habits = sortHabits(unsorted); // user-arranged order
 
     const out = [];
     for (const habit of habits) {
@@ -277,6 +278,19 @@ export const recordMetrics = mutation({
       }
     }
     return { written };
+  },
+});
+
+// Persist the tracker's habit order. Takes the full ordered list of active
+// habit ids and writes sortOrder = position. Ignores unknown/archived ids.
+export const reorder = mutation({
+  args: { habitIds: v.array(v.id("habits")) },
+  handler: async (ctx, args) => {
+    for (let i = 0; i < args.habitIds.length; i++) {
+      const h = await ctx.db.get(args.habitIds[i]);
+      if (h && !h.archivedAt) await ctx.db.patch(args.habitIds[i], { sortOrder: i });
+    }
+    return null;
   },
 });
 

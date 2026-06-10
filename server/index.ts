@@ -604,6 +604,21 @@ async function main() {
     }
   });
 
+  // Persist drag-reorder: body { habitIds: [...] } in the new top-to-bottom order.
+  app.post("/habits/reorder", async (req, res) => {
+    const { habitIds } = req.body ?? {};
+    if (!Array.isArray(habitIds)) {
+      res.status(400).json({ error: "habitIds (ordered array) required" });
+      return;
+    }
+    try {
+      await convexClient.mutation(convexApi.habits.functions.reorder, { habitIds });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   app.post("/habits/archive", async (req, res) => {
     const { habitId } = req.body ?? {};
     if (!habitId) {

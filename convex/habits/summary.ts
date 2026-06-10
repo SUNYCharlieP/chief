@@ -26,6 +26,18 @@ function addDays(date: string, n: number): string {
   ).padStart(2, "0")}`;
 }
 
+// Tracker order: explicit sortOrder ascending, then unplaced habits (no
+// sortOrder) after, by createdAt. Pure so the ordering is vitest-able.
+export function sortHabits<T extends { sortOrder?: number | null; createdAt: number }>(
+  habits: T[],
+): T[] {
+  return [...habits].sort((a, b) => {
+    const ao = a.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    const bo = b.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    return ao !== bo ? ao - bo : a.createdAt - b.createdAt;
+  });
+}
+
 // Day count of the month containing `today` ("day 0 of next month" idiom).
 export function daysInMonth(today: string): number {
   const [y, m] = today.split("-").map(Number);

@@ -157,12 +157,14 @@ describe("resolveAutoStatus + wake_time encoding", () => {
     );
   });
 
-  it("the metric set is closed and structurally excludes intake/weight", () => {
+  it("the metric set is closed; water is the one sanctioned intake metric, weight/calories still excluded", () => {
     const keys = Object.keys(HABIT_METRICS);
     expect(keys.sort()).toEqual(
-      ["mindful_minutes", "resting_hr", "sleep_duration", "steps", "wake_time"].sort(),
+      ["mindful_minutes", "resting_hr", "sleep_duration", "steps", "wake_time", "water"].sort(),
     );
-    // No intake/weight metric exists to construct a habit from.
+    // water (dietaryWater) is a deliberate, sanctioned intake metric (JAR-17).
+    // The guardrail still holds for the metrics the original design excluded:
+    // no weight, no calories, no generic intake.
     expect(keys).not.toContain("body_weight");
     expect(keys).not.toContain("calories");
     expect(keys).not.toContain("intake");
