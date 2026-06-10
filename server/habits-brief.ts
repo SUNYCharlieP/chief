@@ -66,6 +66,17 @@ export async function stageHabitConfirmations(today: string): Promise<void> {
   const rows = await convex.query(api.habits.functions.briefing, { yesterday, today });
   const first = rows.find((r) => r.isManual && r.yesterdayStatus === "unknown");
   if (!first) return;
+
+  // Post the confirm prompt as its OWN message and bind the card to it — NOT to
+  // the briefing. A message with a card renders card-only in the app, so binding
+  // to the briefing would hide the whole brief behind this little card. (Same
+  // card-message-then-prompt split the job draft-and-ask uses.)
+  await convex.mutation(api.messages.send, {
+    conversationId: CONV,
+    role: "assistant",
+    content: `Did you ${first.name} yesterday (${yesterday})?`,
+    complete: true,
+  });
   const now = Date.now();
   await convex.mutation(api.pendingActions.create, {
     actionId: `habit-${first.id}-${yesterday}`,

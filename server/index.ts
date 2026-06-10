@@ -494,7 +494,19 @@ async function main() {
   app.get("/habits", async (_req, res) => {
     try {
       const today = await habitToday();
-      res.json({ today, habits: await convexClient.query(convexApi.habits.functions.list, { today }) });
+      const habits = await convexClient.query(convexApi.habits.functions.list, { today });
+      // Fold createdAt + firstLoggedDate into a tz-correct startDate (same rule
+      // as detail) so the card grid can start at the habit's creation, never
+      // before. Floor at the first logged day for backfill-before-creation.
+      const withStart = await Promise.all(
+        habits.map(async (h: { createdAt: number; firstLoggedDate: string | null }) => {
+          const createdDate = await localDateOf(new Date(h.createdAt));
+          const startDate =
+            h.firstLoggedDate && h.firstLoggedDate < createdDate ? h.firstLoggedDate : createdDate;
+          return { ...h, startDate };
+        }),
+      );
+      res.json({ today, habits: withStart });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
