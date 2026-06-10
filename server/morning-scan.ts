@@ -17,6 +17,8 @@ import { getUserTimezone } from "./timezone-config.js";
 import { pickProactiveYoutubeLine, commitYoutubeSurfaced } from "./youtube-surface.js";
 import { buildBriefing, briefingTodayKey } from "./briefing.js";
 import { buildHabitsSection, stageHabitConfirmations } from "./habits-brief.js";
+import { runSkillMining } from "./skill-mining.js";
+import { stageSkillCandidate } from "./skill-brief.js";
 import { EMPTY_USAGE, type UsageTotals } from "./usage.js";
 
 // Phase 8 morning automation.
@@ -651,6 +653,21 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
     await stageHabitConfirmations(today);
   } catch (err) {
     console.warn(`[morning-surface] habits section failed: ${String(err)}`);
+  }
+
+  // JAR-16: mine ~/.claude for repeated workflows. Order matters:
+  //  1. sweep yesterday's un-acted surfaced candidate to declined (folded-in
+  //     housekeeping from the retired weekly digest);
+  //  2. detect + persist any NEW recurring runs (zero model spend if none);
+  //  3. surface ONE collected candidate as a skill card — but only if a habit
+  //     confirm didn't already take today's single card slot (sequential).
+  // Try/caught so a skill failure never breaks the brief.
+  try {
+    await convex.mutation(api.skillCandidates.sweepSurfaced, {});
+    await runSkillMining();
+    await stageSkillCandidate();
+  } catch (err) {
+    console.warn(`[morning-surface] skill mining failed: ${String(err)}`);
   }
 
   // If both the tech check-in (Convex) and the briefing (snapshots) produced

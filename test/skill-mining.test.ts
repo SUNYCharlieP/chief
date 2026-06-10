@@ -79,10 +79,10 @@ describe("commandTokens — recovers the real command behind cd/ls/&&", () => {
 
 describe("redact — secrets/PII never reach the model bundle", () => {
   it("masks emails, keys, bearer tokens, and long opaque strings", () => {
-    expect(redact("ping nzmj4gwyxh@privaterelay.appleid.com")).toContain("<email>");
+    expect(redact("ping user@example.com")).toContain("<email>");
     expect(redact("export K=sk-live-abcdefghijklmnop")).toContain("<key>");
     expect(redact("curl -H 'Authorization: Bearer abcDEF123ghiJKL456'")).toContain("Bearer <token>");
-    expect(redact("AuthKey_853VFUF9N4 deadbeefdeadbeefdeadbeefdeadbeef")).not.toContain("deadbeefdeadbeefdeadbeefdeadbeef");
+    expect(redact("AuthKey_FAKEKEY0000 deadbeefdeadbeefdeadbeefdeadbeef")).not.toContain("deadbeefdeadbeefdeadbeefdeadbeef");
   });
 
   it("leaves ordinary command text alone", () => {

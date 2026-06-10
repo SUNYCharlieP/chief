@@ -3,6 +3,7 @@ import { api } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
 import { submitReminderAdd, humanDate } from "./reminders-write.js";
 import { draftApplicationFraming, type JobDraftInput } from "./job-draft.js";
+import { appendSkillEntry } from "./brain-write.js";
 
 // The draft-and-ask action layer. A pending action (created by a staging tool,
 // e.g. stage_reminder) is surfaced to Charlie as an "action" card and executes
@@ -29,6 +30,7 @@ interface PendingAction {
   pitch: string;
   expiresAt: number;
   createdAt: number;
+  candidateId?: string; // skills.append: the skillCandidate this resolves
 }
 
 // Build the action card the app renders (approve/reject). Description states
@@ -60,6 +62,11 @@ export function actionCardFor(action: PendingAction): ActionCard {
     } catch {
       description = "Confirm whether you did this habit yesterday.";
     }
+  } else if (action.kind === "skills.append") {
+    title = "Add skill";
+    // The entry IS the drafted Skills.md markdown; show it so approval is
+    // informed — approving writes exactly this to the canonical brain.
+    description = `Add this to your skills (writes to Skills.md on approve):\n\n${action.entry}`;
   }
   return {
     type: "action",
@@ -127,6 +134,24 @@ export async function executeAction(
         return { ok: false, reply: `Couldn't log “${h.name}”: ${String(err)}` };
       }
     }
+    case "skills.append": {
+      // Approve = write the drafted entry to the canonical Skills.md, via the
+      // spool + GUI-session brain-writer (the only authority that can write
+      // iCloud). appendSkillEntry confirms the round-trip against the canonical
+      // file before returning. On success, mark the candidate skilled.
+      const entry = action.entry?.trim() ?? "";
+      if (!entry) return { ok: false, reply: "That skill draft was empty; nothing was written." };
+      const res = await appendSkillEntry(entry);
+      if (!res.confirmed) {
+        return { ok: false, reply: "Submitted the skill, but I could NOT confirm it landed in Skills.md. Not counting it as written." };
+      }
+      if (action.candidateId) {
+        await convex
+          .mutation(api.skillCandidates.setStatus, { candidateId: action.candidateId, status: "skilled" })
+          .catch(() => {});
+      }
+      return { ok: true, reply: "Added to your Skills.md. ✓" };
+    }
     default:
       return { ok: false, reply: `Don't know how to execute action kind "${action.kind}".` };
   }
@@ -181,6 +206,12 @@ export async function rejectPendingAction(
     } catch {
       /* malformed entry: fall back to plain discard */
     }
+  } else if (active.kind === "skills.append" && active.candidateId) {
+    // "No" to a skill suggestion: decline the candidate so it never resurfaces.
+    await convex
+      .mutation(api.skillCandidates.setStatus, { candidateId: active.candidateId, status: "declined" })
+      .catch(() => {});
+    reply = "Skipped — won't suggest that one again.";
   }
   await convex.mutation(api.messages.send, {
     conversationId,

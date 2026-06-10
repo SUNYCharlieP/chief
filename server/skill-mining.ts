@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { convex } from "./convex-client.js";
+import { api } from "../convex/_generated/api.js";
 import { listSessionFiles, readSessionLines } from "./claude-logs.js";
 import { getRuntimeConfig } from "./runtime-config.js";
 import { runAgentRuntime } from "./runtimes/index.js";
@@ -15,7 +17,7 @@ import { runAgentRuntime } from "./runtimes/index.js";
 
 const SCORE_MODEL = process.env.CHIEF_SKILL_SCORE_MODEL ?? "claude-sonnet-4-6";
 const MIN_OCCURRENCES = Number(process.env.CHIEF_SKILL_MIN_OCCURRENCES ?? 2); // Gate 1
-const CONFIDENCE_CUTOFF = Number(process.env.CHIEF_SKILL_CONFIDENCE ?? 0.7); // Gate 2
+const CONFIDENCE_CUTOFF = Number(process.env.CHIEF_SKILL_CONFIDENCE ?? 0.75); // Gate 2
 const MAX_CANDIDATES = Number(process.env.CHIEF_SKILL_MAX_CANDIDATES ?? 8); // model cost cap
 const SUBSUME_OVERLAP = 0.7;
 const WINDOW_DAYS = Number(process.env.CHIEF_SKILL_WINDOW_DAYS ?? 30);
@@ -380,58 +382,34 @@ function parseScored(text: string): Array<Record<string, unknown>> {
 
 // ---- Orchestrator ------------------------------------------------------------
 
-export interface MineReport {
-  sessionsScanned: number;
-  signaturesWithTokens: number;
-  candidatesAfterGate1: number;
-  scored: ScoredCandidate[]; // ALL scored (pass + fail) — the dry run shows these
-  passed: ScoredCandidate[]; // cleared BOTH gates
-  modelCalled: boolean;
-  cutoff: number;
-  minOccurrences: number;
-  usage?: unknown;
-}
-
-// Read logs -> extract -> cluster (Gate 1) -> score (Gate 2). Does NOT persist
-// or write anything; persistence + the morning card are wired separately after
-// the dry-run review. `sinceMs` bounds which session files are read (by mtime).
-export async function mineSkillCandidates(
-  opts: { sinceMs?: number; maxCandidates?: number } = {},
-): Promise<MineReport> {
-  const sinceMs = opts.sinceMs ?? Date.now() - WINDOW_DAYS * 86_400_000;
+// Scan + extract. `sinceMs` bounds which session files are read (by mtime).
+function gatherSignatures(sinceMs: number): {
+  files: number;
+  signatures: SessionSignature[];
+  sigById: Map<string, SessionSignature>;
+} {
   const files = listSessionFiles().filter((f) => f.mtimeMs >= sinceMs);
-
   const signatures: SessionSignature[] = [];
   for (const f of files) {
     const sig = extractSignature(f.sessionId, readSessionLines(f.path) as LogLine[]);
     if (sig.tokens.length > 0) signatures.push(sig);
   }
+  return { files: files.length, signatures, sigById: new Map(signatures.map((s) => [s.sessionId, s])) };
+}
 
-  const candidates = clusterCandidates(signatures, { maxCandidates: opts.maxCandidates });
-  const sigById = new Map(signatures.map((s) => [s.sessionId, s]));
-
-  const report: MineReport = {
-    sessionsScanned: files.length,
-    signaturesWithTokens: signatures.length,
-    candidatesAfterGate1: candidates.length,
-    scored: [],
-    passed: [],
-    modelCalled: false,
-    cutoff: CONFIDENCE_CUTOFF,
-    minOccurrences: MIN_OCCURRENCES,
-  };
-
-  if (candidates.length === 0) return report; // nothing recurred — zero model spend
-
+// GATE 2: one batched Sonnet call over the candidate runs. Returns ALL scored
+// (the cutoff is applied by callers via applyConfidenceGate).
+async function scoreCandidates(
+  candidates: Candidate[],
+  sigById: Map<string, SessionSignature>,
+): Promise<{ scored: ScoredCandidate[]; usage: unknown }> {
+  if (candidates.length === 0) return { scored: [], usage: undefined };
   const bundles = buildBundles(candidates, sigById);
   const runtimeConfig = await getRuntimeConfig();
   const res = await runAgentRuntime(
     { ...runtimeConfig, model: SCORE_MODEL },
     { prompt: JSON.stringify(bundles, null, 2), systemPrompt: SCORING_SYSTEM, tools: [], mode: "background" },
   );
-  report.modelCalled = true;
-  report.usage = res.usage;
-
   const byKey = new Map(candidates.map((c) => [c.patternKey, c]));
   const scored: ScoredCandidate[] = [];
   for (const raw of parseScored(res.text)) {
@@ -451,7 +429,123 @@ export async function mineSkillCandidates(
     });
   }
   scored.sort((a, b) => b.confidence - a.confidence);
+  return { scored, usage: res.usage };
+}
+
+export interface MineReport {
+  sessionsScanned: number;
+  signaturesWithTokens: number;
+  candidatesAfterGate1: number;
+  scored: ScoredCandidate[]; // ALL scored (pass + fail) — the dry run shows these
+  passed: ScoredCandidate[]; // cleared BOTH gates
+  modelCalled: boolean;
+  cutoff: number;
+  minOccurrences: number;
+  usage?: unknown;
+}
+
+// DRY-RUN entry: read logs -> cluster (Gate 1) -> score ALL (Gate 2). Persists
+// NOTHING. Used for review.
+export async function mineSkillCandidates(
+  opts: { sinceMs?: number; maxCandidates?: number } = {},
+): Promise<MineReport> {
+  const sinceMs = opts.sinceMs ?? Date.now() - WINDOW_DAYS * 86_400_000;
+  const { files, signatures, sigById } = gatherSignatures(sinceMs);
+  const candidates = clusterCandidates(signatures, { maxCandidates: opts.maxCandidates });
+
+  const report: MineReport = {
+    sessionsScanned: files,
+    signaturesWithTokens: signatures.length,
+    candidatesAfterGate1: candidates.length,
+    scored: [],
+    passed: [],
+    modelCalled: false,
+    cutoff: CONFIDENCE_CUTOFF,
+    minOccurrences: MIN_OCCURRENCES,
+  };
+  if (candidates.length === 0) return report; // nothing recurred — zero model spend
+
+  const { scored, usage } = await scoreCandidates(candidates, sigById);
+  report.modelCalled = true;
+  report.usage = usage;
   report.scored = scored;
   report.passed = applyConfidenceGate(scored);
   return report;
+}
+
+// Every patternKey already persisted (any status) — so we score only NEW runs.
+async function knownPatternKeys(): Promise<Set<string>> {
+  const statuses = ["collected", "surfaced", "drafting", "skilled", "declined"] as const;
+  const lists = await Promise.all(
+    statuses.map((status) => convex.query(api.skillCandidates.listByStatus, { status, limit: 500 })),
+  );
+  return new Set(lists.flat().map((r: { patternKey: string }) => r.patternKey));
+}
+
+export interface SkillMineSummary {
+  sessionsScanned: number;
+  gate1: number; // runs that recurred (Gate 1)
+  fresh: number; // not already persisted
+  scored: number;
+  collected: number; // cleared BOTH gates -> collected
+  declined: number; // scored but below cutoff -> remembered as declined
+  modelCalled: boolean;
+}
+
+// PRODUCTION entry (the morning run). Cluster (Gate 1), skip patternKeys we've
+// already judged (cost wall — zero model spend when nothing new recurred), score
+// only the new runs, and PERSIST: gate-passers become "collected" (the drafted
+// entry rides in evidence), gate-failers become "declined" so they never score
+// or surface again. Does NOT surface a card — that's stageSkillCandidate.
+export async function runSkillMining(opts: { sinceMs?: number } = {}): Promise<SkillMineSummary> {
+  const sinceMs = opts.sinceMs ?? Date.now() - WINDOW_DAYS * 86_400_000;
+  const { files, signatures, sigById } = gatherSignatures(sinceMs);
+  const candidates = clusterCandidates(signatures);
+
+  const summary: SkillMineSummary = {
+    sessionsScanned: files,
+    gate1: candidates.length,
+    fresh: 0,
+    scored: 0,
+    collected: 0,
+    declined: 0,
+    modelCalled: false,
+  };
+  if (candidates.length === 0) return summary;
+
+  const known = await knownPatternKeys();
+  const fresh = candidates.filter((c) => !known.has(c.patternKey));
+  summary.fresh = fresh.length;
+  if (fresh.length === 0) return summary; // nothing NEW recurred — zero model spend
+
+  const { scored } = await scoreCandidates(fresh, sigById);
+  summary.modelCalled = true;
+  summary.scored = scored.length;
+
+  for (const s of scored) {
+    const passed = s.isReusableWorkflow && s.confidence >= CONFIDENCE_CUTOFF;
+    const candidateId = `sc_${s.patternKey.replace(/^claude:/, "")}`;
+    await convex.mutation(api.skillCandidates.upsertByPattern, {
+      candidateId,
+      patternKey: s.patternKey,
+      title: s.skillTitle,
+      rationale: s.pitch,
+      // evidence carries the drafted entry — the card writes THIS on approval.
+      evidence: JSON.stringify({
+        run: s.tokens,
+        sessions: s.sessions,
+        occurrences: s.occurrences,
+        confidence: s.confidence,
+        entry: s.skillEntry,
+      }),
+      occurrences: s.occurrences,
+    });
+    if (passed) {
+      summary.collected++;
+    } else {
+      await convex.mutation(api.skillCandidates.setStatus, { candidateId, status: "declined" });
+      summary.declined++;
+    }
+  }
+  return summary;
 }

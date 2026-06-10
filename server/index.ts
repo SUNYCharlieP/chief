@@ -18,7 +18,7 @@ import { actionCardFor, approvePendingAction, rejectPendingAction } from "./pend
 import { authMiddleware, authStartupSummary, wsAuthAllowed } from "./auth.js";
 import { processImageUpload } from "./images/upload.js";
 import { linearStatusProbe } from "./integrations/linear.js";
-import { startSkillDigest, stopSkillDigest, runSkillDigest } from "./skill-digest.js";
+import { stopSkillDigest, runSkillDigest } from "./skill-digest.js";
 import {
   startYoutubeDiscover,
   stopYoutubeDiscover,
@@ -806,9 +806,10 @@ async function main() {
 
   startJobObserver();
 
-  startSkillDigest().catch((err) =>
-    console.error("[skill-digest] scheduler failed to start", err),
-  );
+  // JAR-16: the weekly iMessage skill digest is RETIRED. Skill detection now
+  // runs inside the morning brief (runSkillMining + a draft-and-ask card on
+  // app:charlie), with the digest's sweepSurfaced housekeeping folded in there.
+  // startSkillDigest() is intentionally no longer scheduled.
 
   seedYoutubeSourcesFromEnv()
     .then(() =>
