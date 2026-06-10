@@ -659,13 +659,15 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
   //  1. sweep yesterday's un-acted surfaced candidate to declined (folded-in
   //     housekeeping from the retired weekly digest);
   //  2. detect + persist any NEW recurring runs (zero model spend if none);
-  //  3. surface ONE collected candidate as a skill card — but only if a habit
-  //     confirm didn't already take today's single card slot (sequential).
-  // Try/caught so a skill failure never breaks the brief.
+  //  3. surface ONE collected candidate as a skill card — GATED behind
+  //     CHIEF_SKILL_CARDS=on so no live card fires until it's explicitly turned
+  //     on. Detection runs regardless (it just populates candidates); only the
+  //     user-facing card is gated. Sequential — skipped if an action already
+  //     holds today's slot. Try/caught so a skill failure never breaks the brief.
   try {
     await convex.mutation(api.skillCandidates.sweepSurfaced, {});
     await runSkillMining();
-    await stageSkillCandidate();
+    if (process.env.CHIEF_SKILL_CARDS === "on") await stageSkillCandidate();
   } catch (err) {
     console.warn(`[morning-surface] skill mining failed: ${String(err)}`);
   }
