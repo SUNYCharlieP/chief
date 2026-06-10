@@ -511,17 +511,20 @@ async function main() {
     }
   });
 
-  // Manual habits only — auto habits resolve from synced metrics (step 2).
-  // date defaults to today; the briefing's draft-and-ask passes yesterday.
+  // Manual habit day-setter, backed by setDay. Path is legacy-named "log"
+  // (shipped builds 14/15 post completed|missed here for the done bar and
+  // mark-yesterday); the rebuilt repair UI uses the same route and also posts
+  // "unknown" to clear a day. date defaults to today. Window enforced server-
+  // side in setDay.
   app.post("/habits/log", async (req, res) => {
     const { habitId, date, status } = req.body ?? {};
-    if (!habitId || (status !== "completed" && status !== "missed")) {
-      res.status(400).json({ error: "habitId and status (completed|missed) required" });
+    if (!habitId || (status !== "completed" && status !== "missed" && status !== "unknown")) {
+      res.status(400).json({ error: "habitId and status (completed|missed|unknown) required" });
       return;
     }
     try {
       const today = await habitToday();
-      const id = await convexClient.mutation(convexApi.habits.functions.logCompletion, {
+      const id = await convexClient.mutation(convexApi.habits.functions.setDay, {
         habitId,
         date: typeof date === "string" ? date : today,
         today,

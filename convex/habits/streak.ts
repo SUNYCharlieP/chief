@@ -131,6 +131,20 @@ function addDays(date: string, n: number): string {
   return toDay(parseDay(date) + n * MS_PER_DAY);
 }
 
+// Whole-day count from `from` to `to` (negative if `to` precedes `from`).
+export function daysBetween(from: string, to: string): number {
+  return Math.round((parseDay(to) - parseDay(from)) / MS_PER_DAY);
+}
+
+// The repair window the app may edit: a trailing span of `windowDays` ending
+// today (default 7 = today plus the six prior days). Enforced server-side so
+// the app can never backfill deeper — deep backfill is grid editing and
+// invites streak fiction. Future dates are out of the window by definition.
+export function isWithinRepairWindow(date: string, today: string, windowDays = 7): boolean {
+  const delta = daysBetween(date, today); // >= 0 when date is today or earlier
+  return delta >= 0 && delta <= windowDays - 1;
+}
+
 // Monday-anchored start of the week containing `date`.
 function weekStart(date: string): string {
   const ms = parseDay(date);
