@@ -13,13 +13,17 @@
 
 import { readdir, readFile, writeFile, rename, mkdir, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
 
 const SPOOL_DIR = process.env.CHIEF_BRAIN_SPOOL_DIR ?? "/Users/Shared/chief-brain-spool";
 const CANONICAL_SKILLS =
   process.env.CHIEF_BRAIN_CANONICAL ??
   join(homedir(), "Library/Mobile Documents/com~apple~CloudDocs/Brain/Skills.md");
 const BACKUP_DIR = process.env.CHIEF_BRAIN_BACKUP_DIR ?? join(homedir(), ".chief-brain-backups");
+// JAR-16 write health-check sentinel: proves THIS launchd agent (not an
+// interactive shell) can write the iCloud Brain dir, without ever touching
+// Skills.md. The brain reader ignores it (not one of the 4 canonical files).
+const HEALTHCHECK_FILE = join(dirname(CANONICAL_SKILLS), ".writer-healthcheck");
 
 const ACTIVE_HEADER = "## Active Skills";
 const PLACEHOLDER = "(None yet. Build them as the work surfaces them.)";
@@ -68,6 +72,22 @@ async function processRequest(file) {
     req = JSON.parse(raw);
   } catch (err) {
     log(`bad JSON ${file}, deleting: ${err}`);
+    await safeUnlink(path);
+    return;
+  }
+
+  // Allowlisted, non-destructive health check (JAR-16): write a sentinel into
+  // the iCloud Brain dir and stop. Never reads or writes Skills.md, so it can
+  // prove the agent's iCloud write path without risking the real brain.
+  if (req.action === "skills.healthcheck") {
+    const reqId = typeof req.requestId === "string" ? req.requestId : "?";
+    const stamp = `ok ${new Date().toISOString()} req=${reqId}\n`;
+    try {
+      await writeFile(HEALTHCHECK_FILE, stamp, "utf8");
+      log(`healthcheck wrote ${HEALTHCHECK_FILE} (req ${reqId})`);
+    } catch (err) {
+      log(`healthcheck FAILED writing ${HEALTHCHECK_FILE}: ${err}`);
+    }
     await safeUnlink(path);
     return;
   }
