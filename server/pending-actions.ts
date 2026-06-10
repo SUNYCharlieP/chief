@@ -1,5 +1,6 @@
 import { convex } from "./convex-client.js";
 import { api } from "../convex/_generated/api.js";
+import type { Id } from "../convex/_generated/dataModel.js";
 import { submitReminderAdd, humanDate } from "./reminders-write.js";
 import { draftApplicationFraming, type JobDraftInput } from "./job-draft.js";
 
@@ -51,6 +52,14 @@ export function actionCardFor(action: PendingAction): ActionCard {
     } catch {
       description = "Draft application framing for this role (I draft only — never apply)";
     }
+  } else if (action.kind === "habit.confirm") {
+    title = "Confirm habit";
+    try {
+      const h = JSON.parse(action.entry) as { name: string; date: string };
+      description = `Did you ${h.name} yesterday (${h.date})? Approve = done, reject = missed.`;
+    } catch {
+      description = "Confirm whether you did this habit yesterday.";
+    }
   }
   return {
     type: "action",
@@ -97,6 +106,27 @@ export async function executeAction(
       const res = await draftApplicationFraming(j);
       return res.ok ? { ...res, messageKind: "draft.application" } : res;
     }
+    case "habit.confirm": {
+      // Approve = "yes, I did it" -> log yesterday completed. (Reject writes
+      // missed; see rejectPendingAction.)
+      let h: { habitId: string; date: string; name: string; today: string };
+      try {
+        h = JSON.parse(action.entry);
+      } catch {
+        return { ok: false, reply: "That habit confirmation was malformed; nothing was logged." };
+      }
+      try {
+        await convex.mutation(api.habits.functions.setDay, {
+          habitId: h.habitId as Id<"habits">,
+          date: h.date,
+          today: h.today,
+          status: "completed",
+        });
+        return { ok: true, reply: `Logged “${h.name}” done for ${h.date}. ✓` };
+      } catch (err) {
+        return { ok: false, reply: `Couldn't log “${h.name}”: ${String(err)}` };
+      }
+    }
     default:
       return { ok: false, reply: `Don't know how to execute action kind "${action.kind}".` };
   }
@@ -134,7 +164,24 @@ export async function rejectPendingAction(
     return { ok: false, reply: "That action is no longer pending." };
   }
   await convex.mutation(api.pendingActions.setStatus, { actionId, status: "rejected" });
-  const reply = "Discarded — nothing was changed.";
+  // For a habit confirmation, "no" is evidence: write yesterday MISSED (the
+  // refined invariant — a manual miss carries resolvedAt, the user's answer).
+  // Every other kind: reject just discards.
+  let reply = "Discarded — nothing was changed.";
+  if (active.kind === "habit.confirm") {
+    try {
+      const h = JSON.parse(active.entry) as { habitId: string; date: string; name: string; today: string };
+      await convex.mutation(api.habits.functions.setDay, {
+        habitId: h.habitId as Id<"habits">,
+        date: h.date,
+        today: h.today,
+        status: "missed",
+      });
+      reply = `Logged “${h.name}” missed for ${h.date}. Your “no” is the record.`;
+    } catch {
+      /* malformed entry: fall back to plain discard */
+    }
+  }
   await convex.mutation(api.messages.send, {
     conversationId,
     role: "assistant",

@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "../_generated/server";
 import { habitSourceValidator } from "../schema";
 import { summarizeHabit, habitDetail, sortHabits } from "./summary";
-import { isWithinRepairWindow, resolveMetricRow } from "./streak";
+import { isWithinRepairWindow, resolveMetricRow, computeStreak, recentMiss } from "./streak";
 
 // Habit tracker — Phase 3 (JAR-3) persistence bridge: list / create /
 // setDay / archive, called by the express layer (which owns auth and the
@@ -59,6 +59,10 @@ export const list = query({
         source: habit.source,
         goalPeriod: habit.goalPeriod,
         todayResolvedAt: todayLog?.resolvedAt ?? null,
+        // For the card grid's start bound (express turns createdAt into a local
+        // startDate, floored at the first logged day).
+        createdAt: habit.createdAt,
+        firstLoggedDate: entries[0]?.date ?? null,
         ...stats,
       });
     }
@@ -123,6 +127,75 @@ export const detail = query({
       ...d,
       grid: gridWithValue,
     };
+  },
+});
+
+// Per-habit yesterday result + current streak, for the morning brief. Auto
+// habits self-report; manual habits with yesterdayStatus "unknown" (no row)
+// are what the brief turns into draft-and-ask confirmations.
+export const briefing = query({
+  args: { yesterday: v.string(), today: v.string() },
+  handler: async (ctx, args) => {
+    assertDateKey("yesterday", args.yesterday);
+    assertDateKey("today", args.today);
+    const habits = sortHabits(
+      await ctx.db
+        .query("habits")
+        .withIndex("by_archived", (q) => q.eq("archivedAt", undefined))
+        .take(100),
+    );
+    const out = [];
+    for (const habit of habits) {
+      const logsDesc = await ctx.db
+        .query("habitLog")
+        .withIndex("by_habit_and_date", (q) => q.eq("habitId", habit._id))
+        .order("desc")
+        .take(400);
+      const yLog = logsDesc.find((l) => l.date === args.yesterday);
+      const entries = logsDesc.map((l) => ({ date: l.date, status: l.status })).reverse();
+      const streak = computeStreak(entries, {
+        today: args.today,
+        goalPeriod: habit.goalPeriod,
+        weeklyTarget: habit.weeklyTarget,
+      }).currentStreak;
+      out.push({
+        id: habit._id,
+        name: habit.name,
+        isManual: habit.source.type === "manual",
+        metric: habit.source.type === "manual" ? null : habit.source.metric,
+        yesterdayStatus: yLog?.status ?? "unknown",
+        yesterdayValue: yLog?.value ?? null,
+        streak,
+      });
+    }
+    return out;
+  },
+});
+
+// Habits whose most recent miss is `yesterday` and broke a streak >= minStreak.
+// The streak-break nudge source — evidence-gated (a miss exists) and fresh
+// (yesterday), so it fires once per real break, never on no-data days.
+export const streakBreaks = query({
+  args: { yesterday: v.string(), today: v.string(), minStreak: v.number() },
+  handler: async (ctx, args) => {
+    const habits = await ctx.db
+      .query("habits")
+      .withIndex("by_archived", (q) => q.eq("archivedAt", undefined))
+      .take(100);
+    const out: { id: string; name: string; brokenStreak: number; date: string }[] = [];
+    for (const habit of habits) {
+      const logsDesc = await ctx.db
+        .query("habitLog")
+        .withIndex("by_habit_and_date", (q) => q.eq("habitId", habit._id))
+        .order("desc")
+        .take(400);
+      const entries = logsDesc.map((l) => ({ date: l.date, status: l.status })).reverse();
+      const miss = recentMiss(entries, args.today);
+      if (miss && miss.date === args.yesterday && miss.brokenStreak >= args.minStreak) {
+        out.push({ id: habit._id, name: habit.name, brokenStreak: miss.brokenStreak, date: miss.date });
+      }
+    }
+    return out;
   },
 });
 
@@ -283,6 +356,19 @@ export const recordMetrics = mutation({
 
 // Persist the tracker's habit order. Takes the full ordered list of active
 // habit ids and writes sortOrder = position. Ignores unknown/archived ids.
+// Adjust an auto habit's goal threshold (e.g. sleep 7h -> 6h). Manual habits
+// have no goal. The metric + comparator stay pinned; only the number changes.
+export const setGoal = mutation({
+  args: { habitId: v.id("habits"), threshold: v.number() },
+  handler: async (ctx, args) => {
+    const h = await ctx.db.get(args.habitId);
+    if (!h || h.archivedAt) throw new Error("habit not found");
+    if (h.source.type === "manual") throw new Error("manual habits have no goal");
+    await ctx.db.patch(args.habitId, { source: { ...h.source, threshold: args.threshold } });
+    return null;
+  },
+});
+
 export const reorder = mutation({
   args: { habitIds: v.array(v.id("habits")) },
   handler: async (ctx, args) => {

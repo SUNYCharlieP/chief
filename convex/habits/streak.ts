@@ -269,6 +269,38 @@ function weeklyStatuses(
   return out;
 }
 
+// Nudge detector (Phase 3): the most recent MISSED day and the streak it broke
+// (consecutive completed days immediately before it, unknown transparent). The
+// caller nudges only when that miss is fresh (yesterday) and brokenStreak is
+// big enough — so a real ≥3 streak ending yesterday fires exactly one factual
+// nudge, deduped per habit+date. Returns null when there's no miss.
+export function recentMiss(
+  entries: DayEntry[],
+  today: string,
+): { date: string; brokenStreak: number } | null {
+  const map = new Map<string, HabitStatus>();
+  for (const e of entries) map.set(e.date, e.status);
+  const dates = [...map.keys()].sort();
+  if (dates.length === 0) return null;
+
+  const start = dates[0] < today ? dates[0] : today;
+  const arr: { date: string; status: HabitStatus }[] = [];
+  for (let d = start; d <= today; d = addDays(d, 1)) {
+    arr.push({ date: d, status: map.get(d) ?? "unknown" });
+  }
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (arr[i].status !== "missed") continue;
+    let run = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      if (arr[j].status === "completed") run++;
+      else if (arr[j].status === "missed") break;
+      // unknown: transparent, keep counting back
+    }
+    return { date: arr[i].date, brokenStreak: run };
+  }
+  return null;
+}
+
 export function computeStreak(
   entries: DayEntry[],
   opts: {

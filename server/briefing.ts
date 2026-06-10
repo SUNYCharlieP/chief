@@ -87,6 +87,12 @@ function timeLabel(iso: string): string {
 
 // --- main ---------------------------------------------------------------------
 
+// Today's local date key in the briefing timezone — so callers (morning-scan)
+// share the exact day boundary buildBriefing uses.
+export function briefingTodayKey(now: Date = new Date()): string {
+  return localDate(now);
+}
+
 export async function buildBriefing(now: Date = new Date()): Promise<string> {
   const todayKey = localDate(now);
   const window = dateWindow(todayKey, Math.max(1, DUE_DAYS));

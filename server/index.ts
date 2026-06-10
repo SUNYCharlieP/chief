@@ -35,6 +35,7 @@ import { api as convexApi } from "../convex/_generated/api.js";
 import { convex as convexClient } from "./convex-client.js";
 import { getUserTimezone } from "./timezone-config.js";
 import { daysBetween } from "../convex/habits/streak.js";
+import { runStreakNudges } from "./habits-brief.js";
 import { handleUserMessage } from "./interaction-agent.js";
 import { loadIntegrations } from "./integrations/registry.js";
 import { startCleanupLoop } from "./memory/clean.js";
@@ -599,6 +600,11 @@ async function main() {
         days,
       });
       res.json(result);
+      // Event-driven streak-break nudge — fires off the resolved data, after
+      // the response. Failures are swallowed (a nudge must never break ingest).
+      runStreakNudges(today).catch((err) =>
+        console.warn(`[habits] streak nudge failed: ${String(err)}`),
+      );
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

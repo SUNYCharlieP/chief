@@ -15,7 +15,8 @@ import { getRuntimeConfig } from "./runtime-config.js";
 import { runAgentRuntime } from "./runtimes/index.js";
 import { getUserTimezone } from "./timezone-config.js";
 import { pickProactiveYoutubeLine, commitYoutubeSurfaced } from "./youtube-surface.js";
-import { buildBriefing } from "./briefing.js";
+import { buildBriefing, briefingTodayKey } from "./briefing.js";
+import { buildHabitsSection, stageHabitConfirmations } from "./habits-brief.js";
 import { EMPTY_USAGE, type UsageTotals } from "./usage.js";
 
 // Phase 8 morning automation.
@@ -636,6 +637,20 @@ export async function runMorningSurface(): Promise<SurfaceReport> {
     }
   } catch (err) {
     console.warn(`[morning-surface] briefing failed: ${String(err)}`);
+  }
+
+  // Phase 3: append the habit section (auto self-report + manual to-confirm)
+  // and stage the first manual confirmation as a draft-and-ask card. Try/caught
+  // so a habits failure never breaks the existing briefing.
+  try {
+    const today = briefingTodayKey();
+    const habits = await buildHabitsSection(today);
+    if (habits.trim().length > 0) {
+      body = body.trim().length > 0 ? `${body}\n\n${habits}` : habits;
+    }
+    await stageHabitConfirmations(today);
+  } catch (err) {
+    console.warn(`[morning-surface] habits section failed: ${String(err)}`);
   }
 
   // If both the tech check-in (Convex) and the briefing (snapshots) produced

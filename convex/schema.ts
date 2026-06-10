@@ -420,6 +420,7 @@ export default defineSchema({
       v.literal("youtube.brainstorm"),
       v.literal("reminder.add"),
       v.literal("job.draft_application"),
+      v.literal("habit.confirm"),
     ),
     status: v.union(
       v.literal("pending"),
