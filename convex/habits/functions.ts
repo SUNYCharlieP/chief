@@ -39,6 +39,9 @@ export const list = query({
         .withIndex("by_habit_and_date", (q) => q.eq("habitId", habit._id))
         .order("desc")
         .take(400);
+      // Today's resolvedAt rides along so the app can render "done · <time>"
+      // durably (not just at tap time). null when today is unlogged.
+      const todayLog = logsDesc.find((l) => l.date === args.today);
       const entries = logsDesc.reverse().map((l) => ({ date: l.date, status: l.status }));
       const stats = summarizeHabit({
         entries,
@@ -53,6 +56,7 @@ export const list = query({
         icon: habit.icon,
         source: habit.source,
         goalPeriod: habit.goalPeriod,
+        todayResolvedAt: todayLog?.resolvedAt ?? null,
         ...stats,
       });
     }
