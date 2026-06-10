@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "../_generated/server";
 import { habitSourceValidator } from "../schema";
 import { summarizeHabit, habitDetail } from "./summary";
-import { isWithinRepairWindow } from "./streak";
+import { isWithinRepairWindow, resolveMetricRow } from "./streak";
 
 // Habit tracker — Phase 3 (JAR-3) persistence bridge: list / create /
 // setDay / archive, called by the express layer (which owns auth and the
@@ -92,6 +92,10 @@ export const detail = query({
       console.warn(`[habits.detail] ${args.habitId} hit the 2000-row cap`);
     }
     const entries = logsDesc.reverse().map((l) => ({ date: l.date, status: l.status }));
+    // Per-day metric value (auto habits), so the app's auto repair rows can
+    // show the evidence reading alongside status.
+    const valueByDate = new Map<string, number>();
+    for (const l of logsDesc) if (l.value !== undefined) valueByDate.set(l.date, l.value);
 
     const d = habitDetail({
       entries,
@@ -100,6 +104,7 @@ export const detail = query({
       weeklyTarget: habit.weeklyTarget,
       window: args.window,
     });
+    const gridWithValue = d.grid.map((g) => ({ ...g, value: valueByDate.get(g.date) ?? null }));
 
     return {
       habit: {
@@ -115,6 +120,7 @@ export const detail = query({
       // logged before the habit existed (the repair window allows that).
       firstLoggedDate: entries[0]?.date ?? null,
       ...d,
+      grid: gridWithValue,
     };
   },
 });
@@ -193,6 +199,84 @@ export const setDay = mutation({
       resolvedAt: Date.now(),
       createdAt: Date.now(),
     });
+  },
+});
+
+// Metrics ingest (step 2 auto-fill). The phone is the only thing that can read
+// HealthKit, so it POSTs the trailing window's readings here and the server
+// resolves each active auto habit per posted day. A reading absent from a day's
+// payload writes NOTHING for that habit-day (it stays unknown — never forced to
+// a miss). Re-posting a day is idempotent (upsert). Days must be in the repair
+// window and STRICTLY PAST: today and future are rejected, because a partial
+// day must not resolve (steps aren't done yet at 9am).
+//
+// NOTE on window: a posted day must satisfy isWithinRepairWindow AND be < today,
+// i.e. today-6 .. today-1 (the repair window minus today). One window
+// definition shared with manual repair — flag if a literal 7-days-ending-
+// yesterday was meant instead.
+export const recordMetrics = mutation({
+  args: {
+    today: v.string(),
+    days: v.array(
+      v.object({
+        date: v.string(),
+        readings: v.record(v.string(), v.number()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    assertDateKey("today", args.today);
+    for (const day of args.days) {
+      assertDateKey("date", day.date);
+      if (day.date >= args.today) throw new Error("metrics are for past days only");
+      if (!isWithinRepairWindow(day.date, args.today)) {
+        throw new Error("date is outside the editable 7-day window");
+      }
+    }
+
+    const habits = await ctx.db
+      .query("habits")
+      .withIndex("by_archived", (q) => q.eq("archivedAt", undefined))
+      .take(100);
+
+    let written = 0;
+    for (const day of args.days) {
+      for (const habit of habits) {
+        if (habit.source.type === "manual") continue; // auto only
+        const reading = day.readings[habit.source.metric];
+        const row = resolveMetricRow({
+          comparator: habit.source.comparator,
+          threshold: habit.source.threshold,
+          value: reading,
+        });
+        if (!row) continue; // absent / unresolvable -> write nothing
+
+        const existing = await ctx.db
+          .query("habitLog")
+          .withIndex("by_habit_and_date", (q) =>
+            q.eq("habitId", habit._id).eq("date", day.date),
+          )
+          .unique();
+        if (existing) {
+          await ctx.db.patch(existing._id, {
+            status: row.status,
+            value: row.value,
+            resolvedAt: Date.now(),
+          });
+        } else {
+          await ctx.db.insert("habitLog", {
+            habitId: habit._id,
+            date: day.date,
+            status: row.status,
+            value: row.value,
+            resolvedAt: Date.now(),
+            createdAt: Date.now(),
+          });
+        }
+        written++;
+      }
+    }
+    return { written };
   },
 });
 

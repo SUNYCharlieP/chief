@@ -106,6 +106,21 @@ export function resolveAutoStatus(args: {
   return met ? "completed" : "missed";
 }
 
+// Metrics-ingest resolution (step 2): given an auto habit's goal and the day's
+// reading, return the habitLog row to write, or null to write NOTHING. A
+// missing reading -> null (the day stays unknown — never forced to a miss).
+// A present reading always resolves to completed/missed and ALWAYS carries the
+// value, so an auto miss keeps its evidence (value + resolvedAt upstream).
+export function resolveMetricRow(args: {
+  comparator: Comparator;
+  threshold: number;
+  value: number | null | undefined;
+}): { status: Exclude<HabitStatus, "unknown">; value: number } | null {
+  if (args.value === null || args.value === undefined) return null;
+  const status = resolveAutoStatus(args);
+  return status === "unknown" ? null : { status, value: args.value };
+}
+
 // ---------------------------------------------------------------------------
 // Pure date helpers. We anchor every date at UTC noon and do only whole-day
 // arithmetic, which sidesteps DST/timezone drift. Inputs/outputs are always

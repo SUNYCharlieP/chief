@@ -583,6 +583,27 @@ async function main() {
     }
   });
 
+  // Metrics ingest (step 2). The app POSTs HealthKit-derived readings for the
+  // trailing window's PAST days; the server resolves each active auto habit.
+  // Body: { days: [{ date: "YYYY-MM-DD", readings: { metricKey: number } }] }.
+  app.post("/habits/metrics", async (req, res) => {
+    const { days } = req.body ?? {};
+    if (!Array.isArray(days)) {
+      res.status(400).json({ error: "days (array of { date, readings }) required" });
+      return;
+    }
+    try {
+      const today = await habitToday();
+      const result = await convexClient.mutation(convexApi.habits.functions.recordMetrics, {
+        today,
+        days,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   app.post("/habits/archive", async (req, res) => {
     const { habitId } = req.body ?? {};
     if (!habitId) {
