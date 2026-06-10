@@ -34,6 +34,7 @@ import { readCalendar } from "./integrations/calendar.js";
 import { api as convexApi } from "../convex/_generated/api.js";
 import { convex as convexClient } from "./convex-client.js";
 import { getUserTimezone } from "./timezone-config.js";
+import { daysBetween } from "../convex/habits/streak.js";
 import { handleUserMessage } from "./interaction-agent.js";
 import { loadIntegrations } from "./integrations/registry.js";
 import { startCleanupLoop } from "./memory/clean.js";
@@ -475,7 +476,9 @@ async function main() {
   // user's timezone: a habit day is a wall-clock day, and Convex runs in UTC,
   // so `today` is computed here and passed down.
 
-  const habitToday = async (): Promise<string> => {
+  // Local calendar date (YYYY-MM-DD) of an instant in the user's timezone.
+  // All tz->date conversion for habits lives here (Convex runs UTC).
+  const localDateOf = async (instant: Date): Promise<string> => {
     const tz = await getUserTimezone();
     // en-CA renders ISO-style YYYY-MM-DD (same idiom as briefing.ts).
     return new Intl.DateTimeFormat("en-CA", {
@@ -483,13 +486,57 @@ async function main() {
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
-    }).format(new Date());
+    }).format(instant);
   };
+  const habitToday = (): Promise<string> => localDateOf(new Date());
 
   app.get("/habits", async (_req, res) => {
     try {
       const today = await habitToday();
       res.json({ today, habits: await convexClient.query(convexApi.habits.functions.list, { today }) });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Detail view for one habit. window ∈ {30,90,180} (default 30). Express owns
+  // the timezone: it turns the habit's createdAt into the local startDate, then
+  // daysTracked (span through today) and completionRate (= completions /
+  // daysTracked — the honest-mirror denominator: untracked days count). Streaks
+  // and the window math come pre-computed from Convex.
+  app.get("/habits/:id/detail", async (req, res) => {
+    // Loosely typed like the req.body-derived habitId in the other habit routes;
+    // Convex's v.id validator is the real check at the mutation/query boundary.
+    const habitId: any = req.params.id;
+    let window = Number(req.query.window);
+    if (window !== 30 && window !== 90 && window !== 180) window = 30;
+    try {
+      const today = await habitToday();
+      const d = await convexClient.query(convexApi.habits.functions.detail, { habitId, today, window });
+      if (!d) {
+        res.status(404).json({ error: "habit not found" });
+        return;
+      }
+      // Span floors at the earlier of createdAt and the first logged day —
+      // a day backfilled before the habit was created still counts as tracked,
+      // and the rate can never exceed 100%. Lexical min == chronological for
+      // YYYY-MM-DD.
+      const createdDate = await localDateOf(new Date(d.createdAt));
+      const startDate =
+        d.firstLoggedDate && d.firstLoggedDate < createdDate ? d.firstLoggedDate : createdDate;
+      const daysTracked = daysBetween(startDate, today) + 1; // inclusive span
+      const completionRate = daysTracked > 0 ? Math.round((d.completions / daysTracked) * 100) : 0;
+      res.json({
+        habit: { ...d.habit, startDate },
+        lifetime: {
+          daysTracked,
+          completions: d.completions,
+          completionRate,
+          currentStreak: d.currentStreak,
+          bestStreak: d.bestStreak,
+        },
+        window: { days: window, grid: d.grid, weekday: d.weekday, best: d.best, worst: d.worst },
+      });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

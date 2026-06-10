@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "../_generated/server";
 import { habitSourceValidator } from "../schema";
-import { summarizeHabit } from "./summary";
+import { summarizeHabit, habitDetail } from "./summary";
 import { isWithinRepairWindow } from "./streak";
 
 // Habit tracker — Phase 3 (JAR-3) persistence bridge: list / create /
@@ -62,6 +62,60 @@ export const list = query({
       });
     }
     return out;
+  },
+});
+
+// Detail view for one habit. Lifetime math spans all logs (bounded read);
+// grid + weekday cover the selected window. createdAt is returned raw — express
+// owns the timezone and turns it into the local startDate + daysTracked +
+// completionRate, keeping all tz conversion in one layer (same reason `today`
+// is always an argument).
+export const detail = query({
+  args: {
+    habitId: v.id("habits"),
+    today: v.string(),
+    window: v.number(),
+  },
+  handler: async (ctx, args) => {
+    assertDateKey("today", args.today);
+    const habit = await ctx.db.get(args.habitId);
+    if (!habit || habit.archivedAt) return null;
+
+    // All-time read for lifetime stats. 2000 rows ≈ 5+ years of dailies; logged
+    // if ever hit so we'd know to paginate.
+    const logsDesc = await ctx.db
+      .query("habitLog")
+      .withIndex("by_habit_and_date", (q) => q.eq("habitId", args.habitId))
+      .order("desc")
+      .take(2000);
+    if (logsDesc.length === 2000) {
+      console.warn(`[habits.detail] ${args.habitId} hit the 2000-row cap`);
+    }
+    const entries = logsDesc.reverse().map((l) => ({ date: l.date, status: l.status }));
+
+    const d = habitDetail({
+      entries,
+      today: args.today,
+      goalPeriod: habit.goalPeriod,
+      weeklyTarget: habit.weeklyTarget,
+      window: args.window,
+    });
+
+    return {
+      habit: {
+        id: habit._id,
+        name: habit.name,
+        icon: habit.icon,
+        source: habit.source,
+        goalPeriod: habit.goalPeriod,
+      },
+      createdAt: habit.createdAt,
+      // Earliest logged day (ascending entries), so express can floor the
+      // tracked-span at whichever is earlier — createdAt or a backfilled day
+      // logged before the habit existed (the repair window allows that).
+      firstLoggedDate: entries[0]?.date ?? null,
+      ...d,
+    };
   },
 });
 
