@@ -29,7 +29,9 @@ function literalUnion<T extends readonly [string, string, ...string[]]>(
 const habitMetricValidator = literalUnion(HABIT_METRIC_KEYS);
 const comparatorValidator = literalUnion(COMPARATORS);
 const goalPeriodValidator = literalUnion(GOAL_PERIODS);
-const habitStatusValidator = literalUnion(HABIT_STATUSES);
+// Exported so habits/functions.ts validates its args against the SAME closed
+// unions the tables enforce — no drift between API surface and schema.
+export const habitStatusValidator = literalUnion(HABIT_STATUSES);
 
 // Auto sources (Oura / HealthKit) share the same metric+comparator+threshold
 // shape; manual sources carry no metric. threshold is a plain number in the
@@ -41,7 +43,7 @@ const autoSourceFields = {
   threshold: v.number(),
 };
 
-const habitSourceValidator = v.union(
+export const habitSourceValidator = v.union(
   v.object({ type: v.literal(HABIT_SOURCE_TYPES[0]) }), // "manual"
   v.object({ type: v.literal(HABIT_SOURCE_TYPES[1]), ...autoSourceFields }), // "oura-auto"
   v.object({ type: v.literal(HABIT_SOURCE_TYPES[2]), ...autoSourceFields }), // "healthkit-auto"
@@ -566,7 +568,9 @@ export default defineSchema({
   // streak.ts: "completed" | "missed" | "unknown". The not-synced invariant
   // lives here — a not-yet-reported auto metric is "unknown" with no `value`
   // and no `resolvedAt`; a reported failure is "missed" and ALWAYS carries
-  // evidence (`value` + `resolvedAt`). A missing row is treated as "unknown"
+  // `resolvedAt` as evidence. `value` is auto-only: for auto sources a miss
+  // also carries the metric reading; a manual miss has no value — its
+  // evidence is the user's explicit answer. A missing row is treated as "unknown"
   // by the streak walker, so absence is never a miss. `date` is the local
   // calendar day "YYYY-MM-DD"; `value` is the metric reading for auto sources
   // (e.g. minutes-past-midnight for wake_time).

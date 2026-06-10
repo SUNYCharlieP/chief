@@ -9,8 +9,10 @@
 //   * "unknown" is transparent — it never breaks a streak and never extends
 //     one. Only "completed" increments; only "missed" breaks. A day (or week)
 //     with no row at all is treated as "unknown".
-//   * "missed" always carries evidence upstream (a value + resolvedAt); a
-//     not-yet-synced auto metric resolves to "unknown", never a miss.
+//   * "missed" always carries evidence upstream: resolvedAt, plus the metric
+//     value for auto sources. Manual habits have no value — their evidence is
+//     the user's explicit answer (resolvedAt alone). A not-yet-synced auto
+//     metric resolves to "unknown", never a miss.
 //   * The set of auto metrics is CLOSED (HABIT_METRICS below). There is no
 //     weight / calorie / intake metric, so an intake habit is structurally
 //     unconstructable — the type does not admit one. This is the guardrail.
@@ -91,6 +93,8 @@ export function clockToMinutes(hhmm: string): number {
 // Resolve a single auto-sourced day to a status. A null/undefined value means
 // the metric has not synced yet -> "unknown" (never a miss). Comparison is
 // inclusive on both sides so the goal boundary counts as met.
+// Later refinement (accepted v1 trade-off): same-day wake_time resolution —
+// a wake result is final by morning but resolves on the next day's sync.
 export function resolveAutoStatus(args: {
   comparator: Comparator;
   threshold: number;

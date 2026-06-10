@@ -33,6 +33,7 @@ import { apnsConfigured, sendPush, storeDeviceToken } from "./apns.js";
 import { readCalendar } from "./integrations/calendar.js";
 import { api as convexApi } from "../convex/_generated/api.js";
 import { convex as convexClient } from "./convex-client.js";
+import { getUserTimezone } from "./timezone-config.js";
 import { handleUserMessage } from "./interaction-agent.js";
 import { loadIntegrations } from "./integrations/registry.js";
 import { startCleanupLoop } from "./memory/clean.js";
@@ -464,6 +465,83 @@ async function main() {
     }
     try {
       res.json(await rejectPendingAction(String(conversationId), String(actionId)));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // --- Habit tracker (JAR-3 persistence bridge) ---------------------------
+  // Thin transport over convex/habits/functions.ts. This layer owns the
+  // user's timezone: a habit day is a wall-clock day, and Convex runs in UTC,
+  // so `today` is computed here and passed down.
+
+  const habitToday = async (): Promise<string> => {
+    const tz = await getUserTimezone();
+    // en-CA renders ISO-style YYYY-MM-DD (same idiom as briefing.ts).
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+  };
+
+  app.get("/habits", async (_req, res) => {
+    try {
+      const today = await habitToday();
+      res.json({ today, habits: await convexClient.query(convexApi.habits.functions.list, { today }) });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.post("/habits", async (req, res) => {
+    const { name, icon, source } = req.body ?? {};
+    if (typeof name !== "string" || !name.trim() || typeof icon !== "string" || !source?.type) {
+      res.status(400).json({ error: "name, icon, and source { type, ... } required" });
+      return;
+    }
+    try {
+      // The schema's closed-union validator is the real wall for source shape;
+      // a malformed metric/comparator/threshold is rejected at write time.
+      const id = await convexClient.mutation(convexApi.habits.functions.create, { name, icon, source });
+      res.json({ id });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Manual habits only — auto habits resolve from synced metrics (step 2).
+  // date defaults to today; the briefing's draft-and-ask passes yesterday.
+  app.post("/habits/log", async (req, res) => {
+    const { habitId, date, status } = req.body ?? {};
+    if (!habitId || (status !== "completed" && status !== "missed")) {
+      res.status(400).json({ error: "habitId and status (completed|missed) required" });
+      return;
+    }
+    try {
+      const today = await habitToday();
+      const id = await convexClient.mutation(convexApi.habits.functions.logCompletion, {
+        habitId,
+        date: typeof date === "string" ? date : today,
+        today,
+        status,
+      });
+      res.json({ id });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.post("/habits/archive", async (req, res) => {
+    const { habitId } = req.body ?? {};
+    if (!habitId) {
+      res.status(400).json({ error: "habitId required" });
+      return;
+    }
+    try {
+      await convexClient.mutation(convexApi.habits.functions.archive, { habitId });
+      res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
