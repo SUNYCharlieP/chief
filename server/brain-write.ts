@@ -4,6 +4,17 @@ import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { stripEmDashes } from "./text-style.js";
 import { BRAIN_DIR } from "./brain.js";
+import { findCredential } from "../convex/memory/privacy.js";
+
+// Thrown when a skill entry contains credential-shaped content. Carries the
+// pattern NAME only — never the matched content — so the rejection can be
+// logged and surfaced without leaking the secret it caught.
+export class CredentialRejectedError extends Error {
+  constructor(public readonly pattern: string) {
+    super(`skill entry rejected: credential-shaped content (${pattern})`);
+    this.name = "CredentialRejectedError";
+  }
+}
 
 // Stage A local-write executor. The server can't write the canonical brain
 // in-process (the write must be backed up + applied under the GUI session), so
@@ -42,6 +53,13 @@ export interface AppendResult {
 }
 
 export async function appendSkillEntry(rawEntry: string): Promise<AppendResult> {
+  // Privacy gate (JAR-7): a skill entry must never carry a credential into the
+  // canonical Skills.md. Reject before anything is spooled. Throwing (vs a
+  // silent no-op) makes the rejection visible to the caller; the error carries
+  // the pattern name only, so nothing downstream logs the secret.
+  const credential = findCredential(rawEntry);
+  if (credential) throw new CredentialRejectedError(credential);
+
   // Last step before the bytes leave for the spool: strip em/en dashes so the
   // written Skills.md obeys the no-em-dash rule regardless of what the model
   // drafted. Everything downstream (bytes, hash, payload, mirror poll) uses the

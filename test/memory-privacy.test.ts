@@ -5,6 +5,9 @@ import {
   tierForSegment,
   findCredential,
   classifyMemory,
+  previewOf,
+  buildAuditRow,
+  AUDIT_PREVIEW_MAX,
   type MemoryTier,
 } from "../convex/memory/privacy.js";
 
@@ -78,5 +81,55 @@ describe("classifyMemory — the gate", () => {
     expect(classifyMemory("Charlie is a flooring contractor", "identity")).toEqual({ ok: true, tier: "tier3_vault" });
     expect(classifyMemory("tsc --noEmit catches type errors", "knowledge")).toEqual({ ok: true, tier: "tier1_knowledge" });
     expect(classifyMemory("Charlie likes dark mode", "preference")).toEqual({ ok: true, tier: "tier2_private" });
+  });
+});
+
+describe("previewOf — bounded, single-line", () => {
+  it("collapses whitespace and leaves short content intact", () => {
+    expect(previewOf("  Charlie   likes\n dark   mode ")).toBe("Charlie likes dark mode");
+  });
+  it("caps length and marks truncation", () => {
+    const long = "x".repeat(200);
+    const p = previewOf(long);
+    expect(p.length).toBe(AUDIT_PREVIEW_MAX);
+    expect(p.endsWith("…")).toBe(true);
+  });
+});
+
+describe("buildAuditRow — rejected rows log the pattern NAME, never content", () => {
+  it("a rejected row carries the pattern name and NOTHING else identifying", () => {
+    const row = buildAuditRow({ source: "tool", outcome: "rejected", rejectedPattern: "key-prefix" });
+    expect(row).toEqual({ source: "tool", outcome: "rejected", rejectedPattern: "key-prefix" });
+    // No content-bearing fields on a rejection — by construction.
+    expect(row.preview).toBeUndefined();
+    expect(row.memoryId).toBeUndefined();
+    expect(row.privacyTier).toBeUndefined();
+  });
+
+  it("the rejected row never contains the offending content", () => {
+    // The caller only ever has the pattern NAME (from classifyMemory), so even
+    // by intent it cannot place the secret here. Assert the secret is absent.
+    const secret = "sk-live-supersecret0001";
+    const row = buildAuditRow({ source: "extraction", outcome: "rejected", rejectedPattern: "key-prefix" });
+    expect(JSON.stringify(row)).not.toContain(secret);
+    expect(JSON.stringify(row)).not.toContain("supersecret");
+  });
+
+  it("an accepted row carries tier, memoryId, and a clean preview", () => {
+    const row = buildAuditRow({
+      source: "extraction",
+      outcome: "accepted",
+      privacyTier: "tier2_private",
+      memoryId: "mem_abc",
+      preview: "Charlie likes dark mode",
+    });
+    expect(row).toEqual({
+      source: "extraction",
+      outcome: "accepted",
+      privacyTier: "tier2_private",
+      memoryId: "mem_abc",
+      preview: "Charlie likes dark mode",
+    });
+    expect(row.rejectedPattern).toBeUndefined();
   });
 });

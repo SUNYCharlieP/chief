@@ -3,7 +3,7 @@ import { api } from "../convex/_generated/api.js";
 import { convex } from "./convex-client.js";
 import { defineRuntimeTool } from "./runtimes/tool.js";
 import { runtimeText, type RuntimeTool } from "./runtimes/types.js";
-import { appendSkillEntry, sha256 } from "./brain-write.js";
+import { appendSkillEntry, sha256, CredentialRejectedError } from "./brain-write.js";
 import { runBrainstormOpening } from "./youtube-analyze.js";
 import { executeAction } from "./pending-actions.js";
 
@@ -220,10 +220,21 @@ export async function handlePendingActionReply(
         status: "skilled",
       });
     }
-    const res = await appendSkillEntry(active.entry);
-    const reply = res.confirmed
-      ? `Saved to Skills.md (${res.bytes} bytes appended). Verified in the brain at ${res.mirrorPath}.`
-      : `Submitted, not yet confirmed. Write request ${res.requestId} is queued (${res.bytes} bytes) but the canonical brain at ${res.mirrorPath} hasn't reflected it yet.`;
+    let reply: string;
+    try {
+      const res = await appendSkillEntry(active.entry);
+      reply = res.confirmed
+        ? `Saved to Skills.md (${res.bytes} bytes appended). Verified in the brain at ${res.mirrorPath}.`
+        : `Submitted, not yet confirmed. Write request ${res.requestId} is queued (${res.bytes} bytes) but the canonical brain at ${res.mirrorPath} hasn't reflected it yet.`;
+    } catch (err) {
+      // Privacy gate (JAR-7): a credential in the entry is rejected before any
+      // write. Surface it cleanly (pattern name only); never echo the content.
+      if (err instanceof CredentialRejectedError) {
+        reply = `Not saved: that entry looked like it contained a credential (${err.pattern}) and was rejected before writing.`;
+      } else {
+        throw err;
+      }
+    }
     return { handled: true, reply };
   }
 

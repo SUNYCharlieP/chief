@@ -123,6 +123,7 @@ export async function extractAndStore(opts: {
         segment: f.segment,
         importance: rawImportance,
         decayRate: defaults.decayRate,
+        source: "extraction",
         sourceTurn: opts.turnId,
         embedding,
         metadata,

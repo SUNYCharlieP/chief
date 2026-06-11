@@ -41,16 +41,24 @@ export function createMemoryTools(conversationId: string): RuntimeTool[] {
         const tier = args.tier ?? SEGMENT_PREFERRED_TIER[args.segment];
         const memoryId = makeMemoryId();
         const embedding = (await embed(args.content)) ?? undefined;
-        await convex.mutation(api.memoryRecords.upsert, {
+        const stored = await convex.mutation(api.memoryRecords.upsert, {
           memoryId,
           content: args.content,
           tier,
           segment: args.segment,
           importance: args.importance,
           decayRate: DEFAULT_DECAY[tier],
+          source: "tool",
           supersedes: args.supersedes,
           embedding,
         });
+        // The privacy gate (JAR-7) rejects credential-shaped content and returns
+        // null without storing. Report honestly rather than claiming a store.
+        if (stored === null) {
+          return runtimeText(
+            `Not stored: ${memoryId} looked like it contained a credential and was rejected by the privacy gate.`,
+          );
+        }
         await convex.mutation(api.memoryEvents.emit, {
           eventType: "memory.written",
           conversationId,

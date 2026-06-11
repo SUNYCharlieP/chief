@@ -2,6 +2,8 @@ import { action, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { classifyMemory, buildAuditRow, previewOf } from "./memory/privacy";
+import { recordAudit } from "./auditLog";
 
 const tierV = v.union(v.literal("short"), v.literal("long"), v.literal("permanent"));
 const segmentV = v.union(
@@ -23,14 +25,35 @@ export const upsert = mutation({
     segment: segmentV,
     importance: v.number(),
     decayRate: v.number(),
+    // Who is writing this memory (extraction | tool | consolidation). Recorded
+    // on the audit row; NOT stored on the memory doc. OPTIONAL on the wire so
+    // the convex deploy can land before/after the server restart without
+    // breaking writes (an old server that doesn't send it still works); every
+    // real caller passes it, so audit rows are attributed in practice.
+    source: v.optional(v.string()),
     sourceTurn: v.optional(v.string()),
     supersedes: v.optional(v.array(v.string())),
     embedding: v.optional(v.array(v.float64())),
     metadata: v.optional(v.string()),
     imageStorageIds: v.optional(v.union(v.array(v.id("_storage")), v.null())),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<Id<"memoryRecords"> | null> => {
     const now = Date.now();
+    const source = args.source ?? "unknown";
+
+    // PRIVACY GATE (JAR-7). Classify BEFORE any write. Credential-shaped content
+    // is rejected outright and never stored; the rejection is logged with the
+    // pattern NAME only (never the content). Clean content earns a privacyTier
+    // (derived from its segment) that rides onto the stored record.
+    const decision = classifyMemory(args.content, args.segment);
+    if (!decision.ok) {
+      await recordAudit(
+        ctx,
+        buildAuditRow({ source, outcome: "rejected", rejectedPattern: decision.rejected }),
+      );
+      return null; // not stored — the early return is the "never persisted" guarantee
+    }
+    const privacyTier = decision.tier;
 
     // Archive any memories this one supersedes. Must run on BOTH the insert
     // and update paths — consolidation merges typically update an existing
@@ -53,11 +76,13 @@ export const upsert = mutation({
       .withIndex("by_memory_id", (q) => q.eq("memoryId", args.memoryId))
       .unique();
 
+    let resultId: Id<"memoryRecords">;
     if (existing) {
       await ctx.db.patch(existing._id, {
         content: args.content,
         tier: args.tier,
         segment: args.segment,
+        privacyTier,
         importance: args.importance,
         decayRate: args.decayRate,
         supersedes: args.supersedes,
@@ -71,20 +96,38 @@ export const upsert = mutation({
               : existing.imageStorageIds,
         lastAccessedAt: now,
       });
-      return existing._id;
+      resultId = existing._id;
+    } else {
+      // `source` is an audit field, not a memory field — strip it so the doc
+      // matches the memoryRecords validator. privacyTier rides onto the record.
+      const { imageStorageIds, source, ...rest } = args;
+      void source;
+      resultId = await ctx.db.insert("memoryRecords", {
+        ...rest,
+        privacyTier,
+        ...(imageStorageIds && imageStorageIds.length > 0
+          ? { imageStorageIds }
+          : {}),
+        accessCount: 0,
+        lastAccessedAt: now,
+        lifecycle: "active",
+        createdAt: now,
+      });
     }
 
-    const { imageStorageIds, ...rest } = args;
-    return await ctx.db.insert("memoryRecords", {
-      ...rest,
-      ...(imageStorageIds && imageStorageIds.length > 0
-        ? { imageStorageIds }
-        : {}),
-      accessCount: 0,
-      lastAccessedAt: now,
-      lifecycle: "active",
-      createdAt: now,
-    });
+    // Accepted: log the tier, the memoryId it landed at, and a short preview of
+    // the (already-clean) content.
+    await recordAudit(
+      ctx,
+      buildAuditRow({
+        source,
+        outcome: "accepted",
+        privacyTier,
+        memoryId: args.memoryId,
+        preview: previewOf(args.content),
+      }),
+    );
+    return resultId;
   },
 });
 

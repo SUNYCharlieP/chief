@@ -404,6 +404,7 @@ export async function runConsolidation(trigger = "scheduled"): Promise<{
             segment: keep.segment,
             importance: keep.importance,
             decayRate: keep.decayRate,
+            source: "consolidation",
             supersedes: p.absorb,
           });
           merged++;
@@ -422,6 +423,7 @@ export async function runConsolidation(trigger = "scheduled"): Promise<{
             segment: newer.segment,
             importance: newer.importance,
             decayRate: newer.decayRate,
+            source: "consolidation",
             supersedes: p.older,
           });
           merged++;

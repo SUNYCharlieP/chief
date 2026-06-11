@@ -3,7 +3,7 @@ import { api } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
 import { submitReminderAdd, humanDate } from "./reminders-write.js";
 import { draftApplicationFraming, type JobDraftInput } from "./job-draft.js";
-import { appendSkillEntry } from "./brain-write.js";
+import { appendSkillEntry, CredentialRejectedError } from "./brain-write.js";
 
 // The draft-and-ask action layer. A pending action (created by a staging tool,
 // e.g. stage_reminder) is surfaced to Charlie as an "action" card and executes
@@ -141,7 +141,17 @@ export async function executeAction(
       // file before returning. On success, mark the candidate skilled.
       const entry = action.entry?.trim() ?? "";
       if (!entry) return { ok: false, reply: "That skill draft was empty; nothing was written." };
-      const res = await appendSkillEntry(entry);
+      let res;
+      try {
+        res = await appendSkillEntry(entry);
+      } catch (err) {
+        // Privacy gate (JAR-7): credential-shaped content is rejected before any
+        // write. Report it (pattern name only); never echo the content.
+        if (err instanceof CredentialRejectedError) {
+          return { ok: false, reply: `Not written: the skill draft looked like it contained a credential (${err.pattern}) and was rejected.` };
+        }
+        throw err;
+      }
       if (!res.confirmed) {
         return { ok: false, reply: "Submitted the skill, but I could NOT confirm it landed in Skills.md. Not counting it as written." };
       }

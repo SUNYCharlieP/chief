@@ -87,3 +87,63 @@ export function classifyMemory(content: string, segment: MemorySegment): Classif
   if (credential) return { ok: false, rejected: credential };
   return { ok: true, tier: tierForSegment(segment) };
 }
+
+// ---------------------------------------------------------------------------
+// Audit rows. The audit log records every gate decision. The cardinal rule:
+// a REJECTED row logs the credential pattern NAME, never the credential
+// content (logging the rejected secret would be a second leak). That rule is
+// enforced here by the type system, not by reviewer vigilance: the input is a
+// discriminated union, so a "rejected" row is structurally incapable of
+// carrying content/preview, and an "accepted" row carries only its tier, the
+// memoryId it landed at, and a short preview of the (already-clean) content.
+// ---------------------------------------------------------------------------
+
+export const AUDIT_PREVIEW_MAX = 80;
+
+// A one-line, length-capped preview of clean content for accepted audit rows.
+// Only ever called on content that already passed the gate, so there is no
+// credential to leak; this just keeps the audit log readable and bounded.
+export function previewOf(content: string): string {
+  const oneLine = content.replace(/\s+/g, " ").trim();
+  return oneLine.length <= AUDIT_PREVIEW_MAX
+    ? oneLine
+    : oneLine.slice(0, AUDIT_PREVIEW_MAX - 1) + "…";
+}
+
+// The auditLog row minus `at` (the Convex write stamps the time). Mirrors the
+// auditLog table validator in schema.ts.
+export interface AuditRow {
+  source: string;
+  outcome: "accepted" | "rejected";
+  privacyTier?: MemoryTier;
+  memoryId?: string;
+  preview?: string;
+  rejectedPattern?: string;
+}
+
+// Discriminated input: a rejected row can ONLY be built from a pattern name; an
+// accepted row can ONLY be built with a tier, memoryId, and preview. There is
+// no way to attach content to a rejected row — that is the leak prevention.
+export type AuditRowInput =
+  | { source: string; outcome: "rejected"; rejectedPattern: string }
+  | {
+      source: string;
+      outcome: "accepted";
+      privacyTier: MemoryTier;
+      memoryId: string;
+      preview: string;
+    };
+
+export function buildAuditRow(input: AuditRowInput): AuditRow {
+  if (input.outcome === "rejected") {
+    // Pattern name only. No content, no preview — by construction.
+    return { source: input.source, outcome: "rejected", rejectedPattern: input.rejectedPattern };
+  }
+  return {
+    source: input.source,
+    outcome: "accepted",
+    privacyTier: input.privacyTier,
+    memoryId: input.memoryId,
+    preview: input.preview,
+  };
+}

@@ -7,6 +7,7 @@ import {
   HABIT_SOURCE_TYPES,
   HABIT_STATUSES,
 } from "./habits/streak";
+import { MEMORY_TIERS } from "./memory/privacy";
 
 // Build a `v.union(v.literal(...))` validator straight from a canonical tuple
 // in streak.ts, preserving the literal member type. This is what keeps the DB
@@ -33,6 +34,13 @@ const goalPeriodValidator = literalUnion(GOAL_PERIODS);
 // Exported so habits/functions.ts validates its args against the SAME closed
 // unions the tables enforce — no drift between API surface and schema.
 export const habitStatusValidator = literalUnion(HABIT_STATUSES);
+
+// JAR-7 privacy tiers (tier1_knowledge | tier2_private | tier3_vault),
+// single-sourced from convex/memory/privacy.ts. Tier 4 is structural absence —
+// not a member, so the validator can't store it; credential content is rejected
+// at the memoryRecords.upsert gate, never tiered. Orthogonal to memoryRecords'
+// existing `tier` (retention) and `segment` (category).
+const privacyTierValidator = literalUnion(MEMORY_TIERS);
 
 // Auto sources (Oura / HealthKit) share the same metric+comparator+threshold
 // shape; manual sources carry no metric. threshold is a plain number in the
@@ -86,6 +94,10 @@ export default defineSchema({
     memoryId: v.string(),
     content: v.string(),
     tier: v.union(v.literal("short"), v.literal("long"), v.literal("permanent")),
+    // JAR-7 privacy tier (NEW — orthogonal to `tier` above, which is retention).
+    // Optional so existing rows stay valid; the upsert gate sets it on every new
+    // write. Credential content never reaches here — it's rejected at the gate.
+    privacyTier: v.optional(privacyTierValidator),
     segment: v.union(
       v.literal("identity"),
       v.literal("preference"),
@@ -216,6 +228,21 @@ export default defineSchema({
   })
     .index("by_conversation", ["conversationId"])
     .index("by_type", ["eventType"]),
+
+  // JAR-7 audit log: every memory write that passes through the gate records here
+  // — accepted (with privacyTier + the memoryId it landed) or rejected (the
+  // credential pattern that blocked it; NEVER the credential content). APPEND-ONLY
+  // by construction: convex/auditLog.ts exposes only an `append` mutation — no
+  // patch or delete function exists for this table.
+  auditLog: defineTable({
+    source: v.string(), // extraction | consolidation | brain-write | …
+    outcome: v.union(v.literal("accepted"), v.literal("rejected")),
+    privacyTier: v.optional(privacyTierValidator), // accepted only
+    memoryId: v.optional(v.string()), // accepted only — the memoryRecords id
+    preview: v.optional(v.string()), // accepted only — clean content, truncated
+    rejectedPattern: v.optional(v.string()), // rejected only — pattern name, not content
+    at: v.number(),
+  }).index("by_at", ["at"]),
 
   automations: defineTable({
     automationId: v.string(),
