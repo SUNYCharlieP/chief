@@ -1,6 +1,6 @@
 // @vitest-environment edge-runtime
 /// <reference types="vite/client" />
-import { convexTest } from "convex-test";
+import { convexTest, type TestConvex } from "convex-test";
 import { describe, it, expect } from "vitest";
 import { api } from "./_generated/api";
 import schema from "./schema";
@@ -18,7 +18,7 @@ const base = {
   source: "test",
 };
 
-async function memById(t: ReturnType<typeof convexTest>, memoryId: string) {
+async function memById(t: TestConvex<typeof schema>, memoryId: string) {
   return await t.run(async (ctx) => {
     return await ctx.db
       .query("memoryRecords")
