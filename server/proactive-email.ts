@@ -10,6 +10,7 @@ import { getRuntimeConfig, type RuntimeConfig } from "./runtime-config.js";
 import { runAgentRuntime } from "./runtimes/index.js";
 import { EMPTY_USAGE, type UsageTotals } from "./usage.js";
 import { handleUserMessage } from "./interaction-agent.js";
+import { redact } from "./redact.js";
 import { sendImessage } from "./imessage.js";
 import { ensureTrigger, getComposio, listConnectedToolkits } from "./composio.js";
 import { ensureWebhookSubscription } from "./composio-webhook.js";
@@ -210,12 +211,16 @@ export async function classifyEmailImportance(
   // notion of "today" which can be way off.
   const timeBlock = `Current local time: ${tzInfo.now} (timezone: ${tzInfo.timezone}${tzInfo.isExplicit ? "" : ", server fallback — user has not set theirs"}). Today's date in their timezone is ${tzInfo.isoDate}. Use this when judging whether a deadline has already passed.`;
 
+  // JAR-22: redact third-party PII/secrets out of the free-text Body + Snippet
+  // before they reach the classifier model. Sender/Recipient/Subject are kept
+  // intact — the classifier needs the sender for self-sent + reputation matching
+  // and the subject for relevance/phishing signal (structured metadata, not body).
   const userPrompt = [
     `Sender: ${email.sender || "(unknown)"}`,
     `Recipient: ${email.recipient || "(unknown)"}`,
     `Subject: ${email.subject || "(no subject)"}`,
-    `Snippet: ${email.snippet || "(empty)"}`,
-    `Body (truncated):\n${(email.body || "(empty)").slice(0, 1500)}`,
+    `Snippet: ${redact(email.snippet || "(empty)")}`,
+    `Body (truncated):\n${redact((email.body || "(empty)").slice(0, 1500))}`,
   ].join("\n");
 
   let usage: UsageTotals = { ...EMPTY_USAGE, model: runtimeConfig.model };

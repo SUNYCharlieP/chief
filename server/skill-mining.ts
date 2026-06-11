@@ -4,6 +4,7 @@ import { api } from "../convex/_generated/api.js";
 import { listSessionFiles, readSessionLines } from "./claude-logs.js";
 import { getRuntimeConfig } from "./runtime-config.js";
 import { runAgentRuntime } from "./runtimes/index.js";
+import { redact } from "./redact.js";
 
 // JAR-16 Stage B detector, rebuilt over the local ~/.claude session logs.
 // Replaces the old git-commit term-frequency heuristic. Two gates, BOTH required:
@@ -130,17 +131,9 @@ export function commandTokens(cmd: string): string[] {
   return [...new Set(orderedTokens(cmd))];
 }
 
-// Redact secrets/PII before anything reaches the model bundle or persistence.
-// Session logs contain auth tokens, API keys, and emails — none of that leaves
-// this module. Applied to the gist and to every example step.
-export function redact(s: string): string {
-  return s
-    .replace(/\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, "<email>")
-    .replace(/\b(?:sk-|ghp_|gho_|github_pat_|xox[baprs]-|AKIA|AuthKey_)[A-Za-z0-9_-]+/g, "<key>")
-    .replace(/\bBearer\s+[A-Za-z0-9._-]+/gi, "Bearer <token>")
-    .replace(/\b[A-Fa-f0-9]{32,}\b/g, "<hex>")
-    .replace(/\b[A-Za-z0-9_-]{40,}\b/g, "<token>");
-}
+// redact() now lives in the shared ./redact.js module (JAR-22). Re-export it so
+// existing call sites + tests that import it from here keep working unchanged.
+export { redact };
 
 export function extractSignature(sessionId: string, lines: LogLine[]): SessionSignature {
   let gist = "";
