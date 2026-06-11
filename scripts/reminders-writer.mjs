@@ -8,13 +8,21 @@
 // After a successful add it re-runs the mirror so the snapshot reflects the new
 // reminder immediately (the gate on the Chief side polls that snapshot).
 
-import { readdir, readFile, unlink, appendFile } from "node:fs/promises";
+import { readdir, readFile, unlink, appendFile, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SPOOL = process.env.CHIEF_REMINDERS_SPOOL_DIR ?? "/Users/Shared/chief-reminders/spool";
+// JAR-24: user-owned spool (was world-writable /Users/Shared, an injection vector
+// into Reminders). This plist has NO EnvironmentVariables, so THIS source default
+// is what the agent actually reads — keep it and the plist WatchPaths in lockstep.
+const SPOOL = process.env.CHIEF_REMINDERS_SPOOL_DIR ?? join(homedir(), ".chief-reminders-spool");
+// Defense in depth: only honor requests OWNED by the trusted uid (this agent's
+// own uid by default). Even if the spool perms ever regress, a request planted by
+// another user is rejected, never processed. Env override only to test the reject.
+const TRUSTED_UID =
+  process.env.CHIEF_REMINDERS_OWNER_UID !== undefined ? Number(process.env.CHIEF_REMINDERS_OWNER_UID) : process.getuid();
 const MIRROR = join(dirname(fileURLToPath(import.meta.url)), "reminders-mirror.mjs");
 const NODE = process.env.CHIEF_NODE_PATH ?? "/opt/homebrew/bin/node";
 const LOG = process.env.CHIEF_REMINDERS_WRITER_LOG ?? join(homedir(), "Library/Logs/chief-reminders-writer.log");
@@ -98,6 +106,21 @@ function buildAppleScript({ title, dueISO, list, requestId }) {
 
 async function processRequest(file) {
   const path = join(SPOOL, file);
+
+  // Defense in depth (JAR-24): reject any request file not owned by the trusted
+  // uid — a planted request from another user is ignored, never processed.
+  try {
+    const st = await stat(path);
+    if (st.uid !== TRUSTED_UID) {
+      await log(`REJECTED ${file}: owner uid ${st.uid} != trusted ${TRUSTED_UID}; unlinking, not processing`);
+      await unlink(path).catch(() => {});
+      return;
+    }
+  } catch (err) {
+    await log(`cannot stat ${file}: ${err}`);
+    return;
+  }
+
   let req;
   try {
     req = JSON.parse(await readFile(path, "utf8"));

@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 // Reminders WRITE executor (Phase 2). Chief can't write Reminders (cross-user +
@@ -7,7 +8,10 @@ import { join, resolve } from "node:path";
 // polling the refreshed snapshot for the new reminder, never a blind success.
 // Add-only.
 
-const SPOOL_DIR = process.env.CHIEF_REMINDERS_SPOOL_DIR ?? "/Users/Shared/chief-reminders/spool";
+// JAR-24: user-owned spool, NOT /Users/Shared (which was world-writable, an
+// injection vector into Reminders). Created 0700; the reminders-writer also
+// rejects non-owner request files as defense in depth.
+const SPOOL_DIR = process.env.CHIEF_REMINDERS_SPOOL_DIR ?? resolve(homedir(), ".chief-reminders-spool");
 const SNAPSHOT =
   process.env.CHIEF_REMINDERS_SNAPSHOT ?? "/Users/Shared/chief-reminders/reminders.json";
 const POLL_TRIES = 24;
@@ -80,7 +84,7 @@ export function checkReminderDate(
 
 export async function submitReminderAdd(req: ReminderAddRequest): Promise<AddResult> {
   const requestId = randomId("rem");
-  await mkdir(SPOOL_DIR, { recursive: true });
+  await mkdir(SPOOL_DIR, { recursive: true, mode: 0o700 });
   const payload = JSON.stringify({
     op: "reminder.add",
     title: req.title,

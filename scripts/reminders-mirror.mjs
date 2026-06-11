@@ -101,7 +101,7 @@ async function main() {
     reminders,
   };
 
-  await mkdir(OUT_DIR, { recursive: true });
+  await mkdir(OUT_DIR, { recursive: true, mode: 0o700 }); // JAR-24: keep the snapshot dir 0700
   const tmp = `${OUT_FILE}.tmp`;
   await writeFile(tmp, JSON.stringify(snapshot, null, 2), "utf8");
   await rename(tmp, OUT_FILE);
