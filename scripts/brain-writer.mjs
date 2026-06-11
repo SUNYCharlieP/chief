@@ -11,11 +11,20 @@
 // The server reads this canonical file directly and confirms its write against
 // it, so the write is visible the moment this append lands — no mirror hop.
 
-import { readdir, readFile, writeFile, rename, mkdir, unlink } from "node:fs/promises";
+import { readdir, readFile, writeFile, rename, mkdir, unlink, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 
-const SPOOL_DIR = process.env.CHIEF_BRAIN_SPOOL_DIR ?? "/Users/Shared/chief-brain-spool";
+// JAR-21: user-owned spool (was world-writable /Users/Shared, an injection
+// vector into Skills.md). The launchd plist sets CHIEF_BRAIN_SPOOL_DIR; this is
+// the fallback default.
+const SPOOL_DIR = process.env.CHIEF_BRAIN_SPOOL_DIR ?? join(homedir(), ".chief-brain-spool");
+// Defense in depth: only honor requests OWNED by the trusted uid (this agent's
+// own uid by default). Even if the spool perms ever regress to world-writable, a
+// request planted by another user is rejected, never appended. The env override
+// exists only to exercise the reject branch in a test.
+const TRUSTED_UID =
+  process.env.CHIEF_BRAIN_OWNER_UID !== undefined ? Number(process.env.CHIEF_BRAIN_OWNER_UID) : process.getuid();
 const CANONICAL_SKILLS =
   process.env.CHIEF_BRAIN_CANONICAL ??
   join(homedir(), "Library/Mobile Documents/com~apple~CloudDocs/Brain/Skills.md");
@@ -58,6 +67,20 @@ function applyAppend(current, entry) {
 
 async function processRequest(file) {
   const path = resolve(SPOOL_DIR, file);
+
+  // Defense in depth (JAR-21): reject any request file not owned by the trusted
+  // uid — a planted request from another user is ignored, never appended.
+  try {
+    const st = await stat(path);
+    if (st.uid !== TRUSTED_UID) {
+      log(`REJECTED ${file}: owner uid ${st.uid} != trusted ${TRUSTED_UID}; unlinking, not appending`);
+      await safeUnlink(path);
+      return;
+    }
+  } catch (err) {
+    log(`cannot stat ${file}: ${err}`);
+    return;
+  }
 
   let raw;
   try {

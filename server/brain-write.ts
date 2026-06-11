@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { stripEmDashes } from "./text-style.js";
@@ -14,7 +15,10 @@ import { BRAIN_DIR } from "./brain.js";
 // (not a downstream mirror) means a write can't report failed just because a
 // mirror hop lagged or stopped.
 
-const SPOOL_DIR = process.env.CHIEF_BRAIN_SPOOL_DIR ?? "/Users/Shared/chief-brain-spool";
+// JAR-21: user-owned spool, NOT /Users/Shared (which was world-writable, an
+// injection vector into Skills.md). Created 0700 so only charlie can drop
+// requests; the brain-writer also rejects non-owner files as defense in depth.
+const SPOOL_DIR = process.env.CHIEF_BRAIN_SPOOL_DIR ?? resolve(homedir(), ".chief-brain-spool");
 
 const POLL_TRIES = 30;
 const POLL_INTERVAL_MS = 500;
@@ -52,7 +56,7 @@ export async function appendSkillEntry(rawEntry: string): Promise<AppendResult> 
   const marker = `<!-- chief-req:${requestId} -->`;
   const entry = `${cleaned}\n${marker}`;
   const bytes = Buffer.byteLength(entry, "utf8");
-  await mkdir(SPOOL_DIR, { recursive: true });
+  await mkdir(SPOOL_DIR, { recursive: true, mode: 0o700 });
 
   const payload = JSON.stringify({
     action: "skills.append",
