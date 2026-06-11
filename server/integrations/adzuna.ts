@@ -25,10 +25,21 @@ export function adzunaConfigured(): boolean {
 // metro searches use a radius; the remote search drops `where` and leans on the
 // remote keyword, with the actual remote check done in the pre-filter below.
 export const QUERIES: Array<{ label: string; what: string; where?: string; distanceKm?: number }> = [
+  // Construction-PM queries — kept: a PM role at the right firm is still relevant.
   { label: "buffalo-pm", what: "project manager", where: "Buffalo", distanceKm: 48 },
   { label: "buffalo-construction-pm", what: "construction project manager", where: "Buffalo", distanceKm: 64 },
   { label: "buffalo-construction-mgr", what: "construction manager", where: "Buffalo", distanceKm: 64 },
   { label: "remote-construction-pm", what: "construction project manager remote" },
+  // VDC/BIM queries (JAR-15) — the prime target. The search has to LOOK for these
+  // titles or the feed can't surface them no matter how the scorer is tuned.
+  { label: "buffalo-vdc-coordinator", what: "VDC coordinator", where: "Buffalo", distanceKm: 80 },
+  { label: "buffalo-bim-coordinator", what: "BIM coordinator", where: "Buffalo", distanceKm: 80 },
+  { label: "buffalo-bim-manager", what: "BIM manager", where: "Buffalo", distanceKm: 80 },
+  { label: "buffalo-vdc", what: "virtual design construction", where: "Buffalo", distanceKm: 80 },
+  { label: "buffalo-bim-specialist", what: "BIM specialist", where: "Buffalo", distanceKm: 80 },
+  { label: "buffalo-model-coordination", what: "model coordination", where: "Buffalo", distanceKm: 80 },
+  { label: "remote-vdc-coordinator", what: "VDC coordinator remote" },
+  { label: "remote-bim-coordinator", what: "BIM coordinator remote" },
 ];
 
 export interface JobListing {
@@ -165,17 +176,31 @@ export function isSubFloorEstimate(l: JobListing): boolean {
   return top != null && top < SALARY_FLOOR;
 }
 
+// JAR-15: the asset is construction domain knowledge applied to VDC/BIM, so the
+// ranking scores VDC/BIM/coordination UP and field-supervisor titles DOWN.
+const VDC_TERMS = [
+  "vdc", "bim", "revit", "navisworks", "clash detection", "model coordination",
+  "virtual design", "digital delivery", "bim 360", "construction technology",
+  "preconstruction", "coordination",
+];
 const CONSTRUCTION_TERMS = [
   "construction", "contractor", "subcontractor", "general contractor", " gc ",
-  "build", "builder", "jobsite", "job site", "field", "trades", "renovation",
-  "remodel", "flooring", "superintendent", "estimating", "estimator", "owner's rep",
-];
+  "build", "builder", "jobsite", "job site", "trades", "renovation",
+  "remodel", "flooring", "estimating", "estimator", "owner's rep",
+]; // "superintendent" + "field" removed — they were pulling field roles up the rank
 const PM_TERMS = ["project manager", "project management", "project coordinator", "operations manager", " pm "];
+const FIELD_SUPER_TERMS = [
+  "superintendent", "foreman", "field lead", "site supervisor", "field supervisor",
+];
 
 export function relevanceScore(l: JobListing): number {
   const title = ` ${l.title.toLowerCase()} `;
   const desc = ` ${l.description.toLowerCase()} `;
   let score = 0;
+  for (const t of VDC_TERMS) {
+    if (title.includes(t)) score += 10; // prime target, weighted above everything
+    if (desc.includes(t)) score += 3;
+  }
   for (const t of CONSTRUCTION_TERMS) {
     if (title.includes(t)) score += 6;
     if (desc.includes(t)) score += 2;
@@ -183,6 +208,13 @@ export function relevanceScore(l: JobListing): number {
   for (const t of PM_TERMS) {
     if (title.includes(t)) score += 3;
     if (desc.includes(t)) score += 1;
+  }
+  // Field-supervisor titles rank DOWN (not blocklisted): a strong negative on the
+  // TITLE drops pure field-super below the cap, while a real VDC role that only
+  // mentions field coordination in the body keeps its VDC-driven positive score.
+  for (const t of FIELD_SUPER_TERMS) {
+    if (title.includes(t)) score -= 10;
+    if (desc.includes(t)) score -= 1;
   }
   return score;
 }

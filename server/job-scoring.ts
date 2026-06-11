@@ -6,6 +6,7 @@
 // the single source of truth for both the prove script and the observer.
 import type { JobListing } from "./integrations/adzuna.js";
 import { salaryLabel } from "./integrations/adzuna.js";
+import { stripEmDashes } from "./text-style.js";
 
 export const SCORE_MODEL = process.env.CHIEF_JOB_SCORE_MODEL ?? "claude-opus-4-8";
 
@@ -13,67 +14,53 @@ export const SCORE_MODEL = process.env.CHIEF_JOB_SCORE_MODEL ?? "claude-opus-4-8
 // and stays OUT of this public repo: set CHIEF_JOB_PROFILE in .env.local to the
 // real profile. The committed default is a generic placeholder so the scorer
 // still runs without it (with weaker discrimination).
-const DEFAULT_PROFILE = `The candidate is pivoting into construction project management from a
-background in hands-on construction field work and small-business ownership.
-Their selling point is that field and ownership experience: running jobs,
-managing subs and crews, scheduling, estimating, client/GC relationships,
-budgets, and owning P&L on real construction work.`;
+const DEFAULT_PROFILE = `The candidate is moving from hands-on construction into VDC / BIM and
+construction-technology coordination. Their asset is construction domain
+knowledge (how buildings, trades, and sequencing actually work) applied to
+model coordination, clash detection, and digital delivery, NOT field
+supervision. They are moving away from field-supervisor roles.`;
 
 // Exported so the application-framing drafter (job-draft.ts) frames Charlie off
 // the SAME biographical profile the scorer judged against — one source of truth.
 export const PROFILE = process.env.CHIEF_JOB_PROFILE?.trim() || DEFAULT_PROFILE;
 
-export const SCORING_SYSTEM = `You screen job listings for a candidate pivoting into construction project
-management. Decide KEEP or DROP for a single listing.
+export const SCORING_SYSTEM = `You screen job listings for a candidate moving from hands-on construction into
+VDC / BIM / construction-technology coordination. Decide KEEP or DROP for one listing.
 
 CANDIDATE PROFILE:
 ${PROFILE}
 
-THE ONE DISCRIMINATOR THAT MATTERS:
-- KEEP construction-adjacent PM / ops / field-leadership roles where 14 years of
-  real construction field experience and business-ownership is a direct ASSET:
-  construction PM, assistant/project PM at a GC or sub, construction ops manager,
-  estimator, project coordinator on real building/trades work, owner's-rep,
-  superintendent-to-PM tracks, specialty-trade (flooring, etc.) PM.
-- DROP generic IT / software / tech project management (Agile/Scrum/SDLC, JIRA,
-  digital product, PMP-in-an-office roles) where construction field experience is
-  NOT the asset. These often share the words "project manager" but the
-  experience does not transfer; that is the trap to catch.
-- DROP roles that are clearly not PM-track and not construction-ops (pure sales,
-  pure admin, retail, unrelated industries) unless field/ownership experience is
-  the obvious asset.
+THE THESIS — this is the whole judgment:
+The candidate's asset is construction DOMAIN KNOWLEDGE — how buildings, trades,
+sequencing, and jobsite reality actually work — applied to virtual design, model
+coordination, and digital delivery. He is moving AWAY from field supervision.
+Frame every "why" around domain knowledge as the BRIDGE into VDC/BIM, NOT around
+field-supervision experience.
 
-CREDENTIALS AND LISTED REQUIREMENTS (read these carefully, do not over-react):
-Job listings routinely over-ask. A listed requirement is usually a wish-list, not
-a real bar. Judge the role on the NATURE OF THE WORK, not on whether the candidate
-checks every listed box.
-- SOFT signal, DO NOT drop on this alone: "PMP preferred/required," "bachelor's
-  degree required," "X years experience," "PE a plus," and similar listed
-  requirements. These are commonly waived, and 14 years of field + business-owner
-  experience offsets most of them. If the actual work is running the project,
-  coordinating trades, scheduling, and owning budget, KEEP it even when the
-  candidate would not check every listed requirement.
-- HARD gate, legitimate DROP: a credential that is legally or functionally
-  required to perform the CORE work, where the work itself is something
-  field/ownership experience cannot substitute for. Example: a role whose actual
-  job is sealing/stamping structural engineering drawings genuinely needs a PE
-  license; a licensed-trade role whose core function is the licensed work itself.
-  The test is whether the credential gates the day-to-day WORK, not whether the
-  listing happens to mention it.
-- A "Senior Bridge Project Manager" whose real job is managing the bridge build,
-  trades, schedule, and budget is a KEEP even if it lists a PE preference. The
-  same title is a DROP only if the core function is actually PE-stamped design
-  work, not project management.
+- KEEP (prime target): VDC / BIM / model-coordination / preconstruction-technology
+  roles — VDC Coordinator/Manager, BIM Coordinator/Manager/Specialist, Virtual
+  Design & Construction, model/clash coordination, digital delivery, Revit /
+  Navisworks / BIM-360 roles, construction-technology. Construction domain
+  knowledge is exactly what makes the candidate strong here.
+- KEEP (secondary): construction project manager / preconstruction / estimating
+  roles at a real builder / GC / AE firm where construction knowledge transfers.
+  Relevant, but secondary to VDC/BIM.
+- DROP: FIELD-SUPERVISOR roles — Superintendent, Foreman, field lead, site
+  supervisor — whose core job is running crews / the field on site. The candidate
+  is pivoting AWAY from these; DROP them even though they are "construction." The
+  ONLY exception is when the core work is genuinely VDC / model coordination and a
+  field-ish word in the title is incidental.
+- DROP: generic IT / software / digital-product PM (Agile/Scrum/JIRA, SaaS) with
+  no construction or VDC/BIM substance.
 
-When unsure whether a "project manager" role is construction-adjacent vs generic
-IT, look at the industry, the duties, and whether jobsite/field/trades/building
-experience is what they want. Favor DROP when it reads as generic office IT-PM,
-or when the core work genuinely requires a credential field/ownership experience
-cannot replace. Do NOT drop a role whose actual work fits just because the listing
-lists aspirational requirements.
+CREDENTIALS / LISTED REQUIREMENTS: listings over-ask; a listed requirement is
+usually a wish-list, not a real bar. Judge the NATURE OF THE WORK, not whether the
+candidate checks every box — do not drop a real VDC/BIM role just because it lists
+a degree, a cert, or "X years." Treat a credential as a hard gate only when it
+legally / functionally gates the core work (e.g. a PE-stamping design role).
 
 Respond with ONLY a compact JSON object, no prose, no markdown fence:
-{"verdict":"keep","why":"<=15 words, the specific construction-vs-generic reason"}`;
+{"verdict":"keep","why":"<=15 words; name the VDC/BIM-or-domain reason, or why it is field-super / generic"}`;
 
 export function scoringPrompt(l: JobListing): string {
   return `LISTING
@@ -93,7 +80,8 @@ export function parseVerdict(text: string): { verdict: "keep" | "drop"; why: str
     try {
       const obj = JSON.parse(text.slice(start, end + 1)) as { verdict?: string; why?: string };
       const verdict = String(obj.verdict ?? "").toLowerCase() === "keep" ? "keep" : "drop";
-      return { verdict, why: String(obj.why ?? "").trim() || "(no reason given)" };
+      // Strip em/en dashes for voice consistency (the model uses them in the why).
+      return { verdict, why: stripEmDashes(String(obj.why ?? "").trim()) || "(no reason given)" };
     } catch {
       /* fall through */
     }
