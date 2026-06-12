@@ -78,6 +78,13 @@ async function processRequest(file) {
     await unlink(path).catch(() => {});
     return;
   }
+  // Backstop the no-system-default rule: a calendar.add must name a calendar.
+  // The helper also refuses, but rejecting here means we never even invoke it.
+  if (!req.calendar) {
+    await log(`rejected ${file}: no calendar named (calendar.add must target a named writable calendar), deleting`);
+    await unlink(path).catch(() => {});
+    return;
+  }
 
   // Hand the request file straight to the EventKit helper (it decodes the fields
   // it needs and ignores the rest). The helper exits 0 only on a committed save.

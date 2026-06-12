@@ -88,6 +88,16 @@ if reqPath == "--status" {
 
 guard granted else { fail("CALENDAR_ACCESS_DENIED", 2) }
 
+// `--calendars`: list the WRITABLE calendars with their owning account, so the
+// owner can confirm which one is theirs (and that it's writable). Creates nothing.
+if reqPath == "--calendars" {
+    let writable = store.calendars(for: .event).filter { $0.allowsContentModifications }
+    for c in writable.sorted(by: { $0.title < $1.title }) {
+        print("\(c.title)\t[account: \(c.source.title)]")
+    }
+    exit(0)
+}
+
 let req: Req
 do {
     let data = try Data(contentsOf: URL(fileURLWithPath: reqPath))
@@ -102,18 +112,18 @@ guard end >= start else { fail("END_BEFORE_START", 66) }
 
 // Choose the target calendar. A named calendar must exist AND be writable; we
 // never silently retarget to the default when the requested one is missing.
+// NO fall-through to defaultCalendarForNewEvents (the EventKit system default,
+// which on this Mac is a SHARED calendar). A calendar.add MUST name a calendar,
+// and it must be one of the writable calendars. If the caller didn't name one,
+// we refuse — structurally impossible to land an event on a guessed/shared
+// default. (The caller also gates this; this is the last-line backstop.)
 let writable = store.calendars(for: .event).filter { $0.allowsContentModifications }
-let targetCal: EKCalendar
-if let name = req.calendar, !name.isEmpty {
-    guard let match = writable.first(where: { norm($0.title) == norm(name) }) else {
-        let avail = writable.map { "\"\($0.title)\"" }.joined(separator: ", ")
-        fail("NO_WRITABLE_CALENDAR \"\(name)\"; available: \(avail)", 4)
-    }
-    targetCal = match
-} else if let def = store.defaultCalendarForNewEvents {
-    targetCal = def
-} else {
-    fail("NO_DEFAULT_CALENDAR", 5)
+guard let name = req.calendar, !name.isEmpty else {
+    fail("NO_CALENDAR_SPECIFIED: a calendar.add must name a writable calendar", 5)
+}
+guard let targetCal = writable.first(where: { norm($0.title) == norm(name) }) else {
+    let avail = writable.map { "\"\($0.title)\"" }.joined(separator: ", ")
+    fail("NO_WRITABLE_CALENDAR \"\(name)\"; available: \(avail)", 4)
 }
 
 let event = EKEvent(eventStore: store)

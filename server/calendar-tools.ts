@@ -91,6 +91,14 @@ export function createCalendarTools(conversationId: string): RuntimeTool[] {
         // this Mac is a SHARED calendar ("Brianna Work Schedule"); an event there
         // is visible to other people. The model may still target a named calendar.
         const targetCalendar = calendar ?? process.env.CHIEF_CALENDAR_DEFAULT;
+        if (!targetCalendar) {
+          // Reject and ask — never stage a calendar.add that would fall through
+          // to a guessed/shared system-default calendar.
+          return runtimeText(
+            `I won't add this without knowing WHICH calendar, and I won't guess (the system default could be a shared calendar). Ask Charlie which of his calendars to use, then call stage_calendar again with that calendar name.`,
+            false,
+          );
+        }
         const built = buildCalendarEntry({ title, startISO, endISO, calendar: targetCalendar, location });
         if (!built.ok) {
           return runtimeText(`Can't stage that event: ${built.error}. Fix it and call stage_calendar again.`, false);
