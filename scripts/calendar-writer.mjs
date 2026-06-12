@@ -12,8 +12,7 @@
 import { readdir, readFile, unlink, appendFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 // 0700 user-owned spool (JAR-21/24 discipline). This plist has NO
 // EnvironmentVariables, so THIS source default is authoritative — keep it and the
@@ -25,8 +24,6 @@ const DONE = join(SPOOL, "done");
 const TRUSTED_UID =
   process.env.CHIEF_CALENDAR_OWNER_UID !== undefined ? Number(process.env.CHIEF_CALENDAR_OWNER_UID) : process.getuid();
 const HELPER = process.env.CHIEF_CALENDAR_WRITE_HELPER ?? join(homedir(), ".chief-bin/calendar-write-helper");
-const MIRROR = join(dirname(fileURLToPath(import.meta.url)), "calendar-mirror.mjs");
-const NODE = process.env.CHIEF_NODE_PATH ?? "/opt/homebrew/bin/node";
 const LOG = process.env.CHIEF_CALENDAR_WRITER_LOG ?? join(homedir(), "Library/Logs/chief-calendar-writer.log");
 
 async function log(msg) {
@@ -106,13 +103,18 @@ async function processRequest(file) {
   }
   await unlink(path).catch(() => {});
 
-  // Let EventKit commit, then re-snapshot so read_calendar reflects it now.
+  // Let EventKit commit, then ask the PRODUCTION mirror agent to re-snapshot.
+  // We KICK com.chief.calendar-mirror rather than running the mirror script from
+  // here: that agent holds the authoritative CHIEF_CALENDAR_SOURCES config, so
+  // the refresh keeps every source. Running the mirror from this agent (which has
+  // no source env) would default to iCloud-only and CLOBBER the full snapshot,
+  // temporarily dropping the Google/Brianna calendars from Chief's read.
   await new Promise((r) => setTimeout(r, 1500));
   try {
-    await run(NODE, [MIRROR]);
-    await log("re-snapshot done");
+    await run("/bin/launchctl", ["kickstart", "-k", `gui/${process.getuid()}/com.chief.calendar-mirror`]);
+    await log("kicked production mirror to re-snapshot");
   } catch (err) {
-    await log(`re-snapshot failed: ${err}`);
+    await log(`re-snapshot kick failed: ${err}`);
   }
 }
 

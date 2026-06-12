@@ -86,7 +86,12 @@ export function createCalendarTools(conversationId: string): RuntimeTool[] {
         location: z.string().optional().describe("Optional location."),
       },
       async ({ title, startISO, endISO, calendar, location }) => {
-        const built = buildCalendarEntry({ title, startISO, endISO, calendar, location });
+        // Default to Charlie's OWN calendar (CHIEF_CALENDAR_DEFAULT) when the
+        // model doesn't name one — NEVER the EventKit system default, which on
+        // this Mac is a SHARED calendar ("Brianna Work Schedule"); an event there
+        // is visible to other people. The model may still target a named calendar.
+        const targetCalendar = calendar ?? process.env.CHIEF_CALENDAR_DEFAULT;
+        const built = buildCalendarEntry({ title, startISO, endISO, calendar: targetCalendar, location });
         if (!built.ok) {
           return runtimeText(`Can't stage that event: ${built.error}. Fix it and call stage_calendar again.`, false);
         }
