@@ -64,6 +64,28 @@ if #available(macOS 14.0, *) {
     store.requestAccess(to: .event) { ok, _ in granted = ok; sema.signal() }
 }
 sema.wait()
+
+// Status/grant probe: `calendar-write-helper --status` requests access (firing
+// the one-time TCC prompt if undecided), prints the resulting authorization, and
+// creates NO event. Use it to grant + verify Calendar access without a write.
+if reqPath == "--status" {
+    let label: String
+    if #available(macOS 14.0, *) {
+        switch EKEventStore.authorizationStatus(for: .event) {
+        case .fullAccess: label = "fullAccess"
+        case .writeOnly: label = "writeOnly"
+        case .denied: label = "denied"
+        case .restricted: label = "restricted"
+        case .notDetermined: label = "notDetermined"
+        @unknown default: label = "other"
+        }
+    } else {
+        label = granted ? "authorized" : "denied"
+    }
+    print("Calendar access: \(label) (granted: \(granted))")
+    exit(granted ? 0 : 2)
+}
+
 guard granted else { fail("CALENDAR_ACCESS_DENIED", 2) }
 
 let req: Req
