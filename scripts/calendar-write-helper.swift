@@ -67,6 +67,14 @@ func parseISO(_ s: String) -> Date? {
 guard CommandLine.arguments.count >= 2 else { fail("USAGE: calendar-write-helper <request.json>", 64) }
 let reqPath = CommandLine.arguments[1]
 
+// Version probe — runs BEFORE any access request, so it is checkable headless to
+// prove WHICH build is live without needing the Calendar grant (the
+// verify-the-artifact lesson: don't assume a recompile took).
+if reqPath == "--version" {
+    print("calendar-write-helper v3-calendarIdentifier")
+    exit(0)
+}
+
 // Request Calendar access FIRST — before any file work — so even a probe
 // invocation (with a throwaway path) triggers the per-binary TCC prompt, which
 // is how this binary earns the grant once. Also fails fast on a denied grant.
@@ -108,8 +116,11 @@ guard granted else { fail("CALENDAR_ACCESS_DENIED", 2) }
 if reqPath == "--calendars" {
     let all = store.calendars(for: .event)
     let writable = all.filter { $0.allowsContentModifications }
-    for c in writable.sorted(by: { $0.title < $1.title }) {
-        print("\(c.title)\t[account: \(accountEmail(c.source, all))]")
+    // Sorted by account then title so same-account calendars cluster. The [id] is
+    // the stable, unambiguous identifier to pin in CHIEF_CALENDAR_DEFAULT — the
+    // account label is only a hint (it can be a bare "Google").
+    for c in writable.sorted(by: { (accountEmail($0.source, all), $0.title) < (accountEmail($1.source, all), $1.title) }) {
+        print("\(c.title)\t[account: \(accountEmail(c.source, all))]\t[id: \(c.calendarIdentifier)]")
     }
     exit(0)
 }
@@ -129,32 +140,32 @@ guard end >= start else { fail("END_BEFORE_START", 66) }
 // Choose the target calendar. A named calendar must exist AND be writable; we
 // never silently retarget to the default when the requested one is missing.
 // NO fall-through to defaultCalendarForNewEvents (the EventKit system default,
-// which on this Mac is a SHARED calendar). A calendar.add MUST name a calendar,
-// and the target is matched by NAME + ACCOUNT EMAIL — never the bare provider
-// label — so a same-named "Personal" on a different Google account (e.g. Chief's
-// charliepiazza4) or a shared account cannot be captured. Structurally
-// impossible to land an event on a guessed/shared/wrong-account calendar.
+// which on this Mac is a SHARED calendar). A calendar.add MUST identify a
+// writable calendar, matched FIRST by calendarIdentifier — EventKit's stable,
+// unique, account-safe ID (one calendar, one account) — so a same-named
+// "Personal" on Chief's account or a shared account cannot be captured. A bare
+// NAME is accepted only as a fallback and ONLY if it's unambiguous among writable
+// calendars. Structurally impossible to land on a guessed/shared/wrong-account one.
 let allCals = store.calendars(for: .event)
 let writable = allCals.filter { $0.allowsContentModifications }
-guard let raw = req.calendar, !raw.trimmingCharacters(in: .whitespaces).isEmpty else {
-    fail("NO_CALENDAR_SPECIFIED: a calendar.add must name a writable calendar", 5)
+guard let raw0 = req.calendar, !raw0.trimmingCharacters(in: .whitespaces).isEmpty else {
+    fail("NO_CALENDAR_SPECIFIED: a calendar.add must identify a writable calendar", 5)
 }
-// Accept "Calendar Name|account-email" (the account-qualified form) or a bare
-// name. When an email is given it MUST equal the calendar's owning-account email.
-let parts = raw.split(separator: "|", maxSplits: 1).map { String($0).trimmingCharacters(in: .whitespaces) }
-let wantName = parts[0]
-let wantEmail: String? = parts.count > 1 ? parts[1] : nil
-let matches = writable.filter {
-    norm($0.title) == norm(wantName) && (wantEmail == nil || norm(accountEmail($0.source, allCals)) == norm(wantEmail!))
-}
-guard matches.count == 1 else {
-    if matches.isEmpty {
-        let avail = writable.map { "\"\($0.title) [\(accountEmail($0.source, allCals))]\"" }.joined(separator: ", ")
-        fail("NO_WRITABLE_CALENDAR matching \"\(raw)\"; available: \(avail)", 4)
+let want = raw0.trimmingCharacters(in: .whitespaces)
+let targetCal: EKCalendar
+if let byId = writable.first(where: { $0.calendarIdentifier == want }) {
+    targetCal = byId // reliable: exact, unique, account-locked
+} else {
+    let byName = writable.filter { norm($0.title) == norm(want) }
+    if byName.count == 1 {
+        targetCal = byName[0]
+    } else if byName.isEmpty {
+        let avail = writable.map { "\"\($0.title)\" [\(accountEmail($0.source, allCals))] [id:\($0.calendarIdentifier)]" }.joined(separator: ", ")
+        fail("NO_WRITABLE_CALENDAR matching \"\(want)\"; available: \(avail)", 4)
+    } else {
+        fail("AMBIGUOUS_CALENDAR \"\(want)\" matches \(byName.count) writable calendars; pin the exact [id] from --calendars", 4)
     }
-    fail("AMBIGUOUS_CALENDAR \"\(raw)\" matches \(matches.count); qualify as \"Name|account-email\"", 4)
 }
-let targetCal = matches[0]
 
 let event = EKEvent(eventStore: store)
 event.title = req.title
