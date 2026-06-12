@@ -1,12 +1,16 @@
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { MutationCtx } from "./_generated/server";
 import { type AuditRow, type MemoryTier } from "./memory/privacy";
 
-// Append-only audit log for the memory privacy gate (JAR-7). Every gate
-// decision lands here: a REJECTED row records the credential pattern NAME (never
-// the content), an ACCEPTED row records the tier, the memoryId, and a short
-// preview of the already-clean content.
+// Append-only audit log for security decisions. Two writers funnel through the
+// single recordAudit insert below:
+//   - the memory privacy gate (JAR-7): credential rejects log the pattern NAME
+//     (never the content); accepts log the tier + memoryId + a clean preview.
+//   - outbound-send decisions (JAR-26): a message.send to a non-allowlisted
+//     recipient (or one carrying a credential shape) is rejected and logged
+//     with the REASON (never the message body); an allowed send logs the
+//     recipient display name.
 //
 // APPEND-ONLY BY CONSTRUCTION: the ONLY write to the auditLog table in the whole
 // codebase is the single ctx.db.insert below. There is no patch and no delete —
@@ -46,6 +50,31 @@ export const record = internalMutation({
   },
   handler: async (ctx, args) => {
     await recordAudit(ctx, args);
+  },
+});
+
+// Server-callable append for outbound-send decisions (JAR-26). Public (not
+// internal) because it is invoked by the Express server via the convex client,
+// which can only reach public functions; in this single-user deployment the
+// threat model does not include an external party forging send-audit rows.
+// Insert-only, through the same recordAudit funnel — append-only holds.
+// CARDINAL RULE: never pass the message body here. `reason` is a fixed pattern
+// name (e.g. "recipient-not-allowlisted", "credential-in-body"); `recipient` is
+// a display name, never the raw handle.
+export const recordDecision = mutation({
+  args: {
+    source: v.string(),
+    outcome: v.union(v.literal("accepted"), v.literal("rejected")),
+    reason: v.optional(v.string()),
+    recipient: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await recordAudit(ctx, {
+      source: args.source,
+      outcome: args.outcome,
+      rejectedPattern: args.reason,
+      preview: args.recipient,
+    });
   },
 });
 

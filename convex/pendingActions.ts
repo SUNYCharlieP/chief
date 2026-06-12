@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { pendingActionKindValidator, stakesValidator } from "./pendingActionKinds";
 
 const statusV = v.union(
   v.literal("pending"),
@@ -14,13 +15,8 @@ export const create = mutation({
   args: {
     actionId: v.string(),
     conversationId: v.string(),
-    kind: v.union(
-      v.literal("skills.append"),
-      v.literal("youtube.brainstorm"),
-      v.literal("reminder.add"),
-      v.literal("job.draft_application"),
-      v.literal("habit.confirm"),
-    ),
+    kind: pendingActionKindValidator,
+    stakes: v.optional(stakesValidator),
     pitch: v.string(),
     entry: v.string(),
     targetFile: v.string(),

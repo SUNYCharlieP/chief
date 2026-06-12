@@ -8,6 +8,7 @@ import {
   HABIT_STATUSES,
 } from "./habits/streak";
 import { MEMORY_TIERS } from "./memory/privacy";
+import { pendingActionKindValidator, stakesValidator } from "./pendingActionKinds";
 
 // Build a `v.union(v.literal(...))` validator straight from a canonical tuple
 // in streak.ts, preserving the literal member type. This is what keeps the DB
@@ -442,13 +443,11 @@ export default defineSchema({
   pendingActions: defineTable({
     actionId: v.string(),
     conversationId: v.string(),
-    kind: v.union(
-      v.literal("skills.append"),
-      v.literal("youtube.brainstorm"),
-      v.literal("reminder.add"),
-      v.literal("job.draft_application"),
-      v.literal("habit.confirm"),
-    ),
+    kind: pendingActionKindValidator,
+    // Surface routing (JAR-26): low = inline card, high = modal. Optional on the
+    // wire so the convex deploy can land before/after the server restart without
+    // breaking writes; the server sets it on every new action.
+    stakes: v.optional(stakesValidator),
     status: v.union(
       v.literal("pending"),
       v.literal("committed"),
