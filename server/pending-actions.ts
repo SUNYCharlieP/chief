@@ -4,6 +4,10 @@ import type { Id } from "../convex/_generated/dataModel.js";
 import { submitReminderAdd, humanDate } from "./reminders-write.js";
 import { draftApplicationFraming, type JobDraftInput } from "./job-draft.js";
 import { appendSkillEntry, CredentialRejectedError } from "./brain-write.js";
+import { sendToContact } from "./outbound-message.js";
+import { parseCalendarEntry } from "./calendar-entry.js";
+import { submitCalendarAdd } from "./calendar-write.js";
+import { stakesForKind, type PendingActionKind, type Stakes } from "../convex/pendingActionKinds.js";
 
 // The draft-and-ask action layer. A pending action (created by a staging tool,
 // e.g. stage_reminder) is surfaced to Charlie as an "action" card and executes
@@ -18,6 +22,7 @@ export interface ActionCard {
   type: "action";
   actionId: string;
   kind: string;
+  stakes: Stakes; // surface routing: low = inline card, high = modal (JAR-26)
   title: string; // short label, e.g. "Add reminder"
   description: string; // exactly what approving will do
   expiresAt: number; // epoch ms
@@ -26,6 +31,7 @@ export interface ActionCard {
 interface PendingAction {
   actionId: string;
   kind: string;
+  stakes?: Stakes; // set at create; defaulted from kind for older rows
   entry: string;
   pitch: string;
   expiresAt: number;
@@ -67,11 +73,33 @@ export function actionCardFor(action: PendingAction): ActionCard {
     // The entry IS the drafted Skills.md markdown; show it so approval is
     // informed — approving writes exactly this to the canonical brain.
     description = `Add this to your skills (writes to Skills.md on approve):\n\n${action.entry}`;
+  } else if (action.kind === "message.send") {
+    title = "Send message";
+    try {
+      const m = JSON.parse(action.entry) as { display: string; text: string };
+      description = `Send to ${m.display}:\n\n“${m.text}”`;
+    } catch {
+      description = "Send a message.";
+    }
+  } else if (action.kind === "calendar.add") {
+    title = "Add to calendar";
+    const parsed = parseCalendarEntry(action.entry);
+    if (parsed.ok) {
+      const e = parsed.entry;
+      const t = e.startISO.match(/T(\d{2}):(\d{2})/);
+      const time = t ? ` ${Number(t[1]) % 12 || 12}:${t[2]} ${Number(t[1]) < 12 ? "AM" : "PM"}` : "";
+      description = `Add “${e.title}” to your calendar on ${humanDate(e.startISO)}${time}${e.location ? ` at ${e.location}` : ""}`;
+    } else {
+      description = "Add an event to your calendar.";
+    }
   }
   return {
     type: "action",
     actionId: action.actionId,
     kind: action.kind,
+    // Route the surface on stakes; default from the kind for rows created before
+    // the field existed, so an old high-stakes kind can never fall back to inline.
+    stakes: action.stakes ?? stakesForKind(action.kind as PendingActionKind),
     title,
     description,
     expiresAt: action.expiresAt,
@@ -161,6 +189,51 @@ export async function executeAction(
           .catch(() => {});
       }
       return { ok: true, reply: "Added to your Skills.md. ✓" };
+    }
+    case "message.send": {
+      let m: { recipientName: string; display: string; text: string };
+      try {
+        m = JSON.parse(action.entry);
+      } catch {
+        return { ok: false, reply: "That message draft was malformed; nothing was sent." };
+      }
+      // Re-screen + send (defense in depth — the allowlist + credential guard run
+      // again here, not just at stage). sendToContact resolves the recipient fresh
+      // and is isolated from the Charlie poll loop. Reject-and-log on a miss; log
+      // the accepted send too — both via the append-only recordDecision (the
+      // reason is a fixed label/pattern name, never the message body).
+      const res = await sendToContact(m.recipientName, m.text);
+      if (!res.ok) {
+        await convex
+          .mutation(api.auditLog.recordDecision, {
+            source: "message.send",
+            outcome: "rejected",
+            reason: res.reason,
+            recipient: m.display,
+          })
+          .catch(() => {});
+        return { ok: false, reply: `Not sent (${res.reason}).` };
+      }
+      await convex
+        .mutation(api.auditLog.recordDecision, {
+          source: "message.send",
+          outcome: "accepted",
+          recipient: res.recipient,
+        })
+        .catch(() => {});
+      return { ok: true, reply: `Sent to ${res.recipient}. ✓` };
+    }
+    case "calendar.add": {
+      const parsed = parseCalendarEntry(action.entry);
+      if (!parsed.ok) {
+        return { ok: false, reply: `That calendar draft was malformed: ${parsed.error}.` };
+      }
+      // Spool + the charlie-side calendar-writer (EventKit). Confirms the
+      // round-trip via the writer's per-request sentinel before claiming success.
+      const res = await submitCalendarAdd(parsed.entry);
+      return res.confirmed
+        ? { ok: true, reply: `Added “${parsed.entry.title}” to your calendar. ✓` }
+        : { ok: false, reply: `Submitted, but I could NOT confirm “${parsed.entry.title}” landed on your calendar. Don't count on it.` };
     }
     default:
       return { ok: false, reply: `Don't know how to execute action kind "${action.kind}".` };

@@ -14,6 +14,7 @@ import { createYoutubeTools } from "./youtube-tools.js";
 import { createLinearTools } from "./linear-tools.js";
 import { createReminderTools } from "./reminders-tools.js";
 import { createCalendarTools } from "./calendar-tools.js";
+import { createMessageTools } from "./message-tools.js";
 import {
   getRuntimeConfig,
   resolveRuntimeInput,
@@ -510,7 +511,8 @@ export async function handleUserMessage(opts: HandleOpts): Promise<string> {
     ...createYoutubeTools(opts.conversationId),
     ...createLinearTools(),
     ...createReminderTools(opts.conversationId),
-    ...createCalendarTools(),
+    ...createCalendarTools(opts.conversationId),
+    ...createMessageTools(opts.conversationId),
     defineRuntimeTool(
       "boop-ack",
       "send_ack",

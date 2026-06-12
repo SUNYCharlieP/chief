@@ -1,12 +1,21 @@
 import { z } from "zod";
+import { api } from "../convex/_generated/api.js";
+import { convex } from "./convex-client.js";
 import { defineRuntimeTool } from "./runtimes/tool.js";
 import { runtimeText, type RuntimeTool } from "./runtimes/types.js";
 import { readCalendar } from "./integrations/calendar.js";
+import { buildCalendarEntry, serializeCalendarEntry } from "./calendar-entry.js";
+import { humanDate } from "./reminders-write.js";
+import { stakesForKind } from "../convex/pendingActionKinds.js";
 
-// Phase 3: read-only calendar. No writes. Window-honest: the snapshot only
-// covers a forward window, so a query beyond it returns "past my window", never
-// a false "nothing scheduled".
-export function createCalendarTools(): RuntimeTool[] {
+function randomId(prefix: string): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Phase 3 read + JAR-26 add (draft-and-ask). read_calendar is READ-ONLY and
+// window-honest; stage_calendar adds an event to Charlie's OWN calendar (add-only,
+// low-stakes) and writes only on his explicit approval.
+export function createCalendarTools(conversationId: string): RuntimeTool[] {
   return [
     defineRuntimeTool(
       "boop-calendar",
@@ -62,6 +71,42 @@ export function createCalendarTools(): RuntimeTool[] {
             null,
             2,
           ),
+        );
+      },
+    ),
+    defineRuntimeTool(
+      "boop-calendar",
+      "stage_calendar",
+      `Stage a NEW event to add to Charlie's OWN calendar (add-only; cannot edit or delete). Resolve the date/time FIRST: convert any relative phrase ("Friday", "next week", "7pm") into a full ISO datetime against today, and show Charlie the ABSOLUTE date/time in the draft. Provide startISO and endISO; if he only gave a start, pick a sensible duration (default +1 hour). Optional calendar name (omit to use his default) and location. After staging, show the draft and ask for a yes; the write happens only on his explicit confirm — never claim it's added before that.`,
+      {
+        title: z.string().describe('Event title, e.g. "Dinner with Mom".'),
+        startISO: z.string().describe("Absolute start ISO8601 computed against today, e.g. 2026-06-20T18:00:00."),
+        endISO: z.string().describe("Absolute end ISO8601, after start. Default +1h if only a start was given."),
+        calendar: z.string().optional().describe("Target calendar name; omit to use the default."),
+        location: z.string().optional().describe("Optional location."),
+      },
+      async ({ title, startISO, endISO, calendar, location }) => {
+        const built = buildCalendarEntry({ title, startISO, endISO, calendar, location });
+        if (!built.ok) {
+          return runtimeText(`Can't stage that event: ${built.error}. Fix it and call stage_calendar again.`, false);
+        }
+        const actionId = randomId("pa");
+        const now = Date.now();
+        await convex.mutation(api.pendingActions.create, {
+          actionId,
+          conversationId,
+          kind: "calendar.add",
+          stakes: stakesForKind("calendar.add"),
+          pitch: "",
+          entry: serializeCalendarEntry(built.entry),
+          targetFile: "",
+          sha256: "",
+          createdAt: now,
+          expiresAt: now + 30 * 60 * 1000,
+        });
+        const e = built.entry;
+        return runtimeText(
+          `Staged calendar event. Show Charlie this exact draft and ask for a yes:\n  Add: ${e.title}\n  When: ${humanDate(e.startISO)}\n${e.calendar ? `  Calendar: ${e.calendar}\n` : ""}${e.location ? `  Where: ${e.location}\n` : ""}Then end with: Reply "yes" to add it (anything else cancels). Do NOT claim it's added; the write happens only on his yes.`,
         );
       },
     ),
