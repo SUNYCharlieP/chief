@@ -31,6 +31,21 @@ func norm(_ s: String) -> String {
         .lowercased()
 }
 
+// Resolve a calendar's OWNING ACCOUNT to a real email. EKSource.title is just the
+// provider ("Google", "iCloud") — useless when two Google accounts are present
+// (e.g. cpiazza717 vs Chief's charliepiazza4). But a Google account's own primary
+// calendar is named after its email, so the email-named calendar sharing this
+// source IS the account identity. Falls back to the source title when there's no
+// email-named calendar (e.g. iCloud).
+func accountEmail(_ source: EKSource, _ all: [EKCalendar]) -> String {
+    if let emailCal = all.first(where: {
+        $0.source.sourceIdentifier == source.sourceIdentifier && $0.title.contains("@")
+    }) {
+        return emailCal.title
+    }
+    return source.title
+}
+
 func parseISO(_ s: String) -> Date? {
     let f1 = ISO8601DateFormatter()
     f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -91,9 +106,10 @@ guard granted else { fail("CALENDAR_ACCESS_DENIED", 2) }
 // `--calendars`: list the WRITABLE calendars with their owning account, so the
 // owner can confirm which one is theirs (and that it's writable). Creates nothing.
 if reqPath == "--calendars" {
-    let writable = store.calendars(for: .event).filter { $0.allowsContentModifications }
+    let all = store.calendars(for: .event)
+    let writable = all.filter { $0.allowsContentModifications }
     for c in writable.sorted(by: { $0.title < $1.title }) {
-        print("\(c.title)\t[account: \(c.source.title)]")
+        print("\(c.title)\t[account: \(accountEmail(c.source, all))]")
     }
     exit(0)
 }
@@ -114,17 +130,31 @@ guard end >= start else { fail("END_BEFORE_START", 66) }
 // never silently retarget to the default when the requested one is missing.
 // NO fall-through to defaultCalendarForNewEvents (the EventKit system default,
 // which on this Mac is a SHARED calendar). A calendar.add MUST name a calendar,
-// and it must be one of the writable calendars. If the caller didn't name one,
-// we refuse — structurally impossible to land an event on a guessed/shared
-// default. (The caller also gates this; this is the last-line backstop.)
-let writable = store.calendars(for: .event).filter { $0.allowsContentModifications }
-guard let name = req.calendar, !name.isEmpty else {
+// and the target is matched by NAME + ACCOUNT EMAIL — never the bare provider
+// label — so a same-named "Personal" on a different Google account (e.g. Chief's
+// charliepiazza4) or a shared account cannot be captured. Structurally
+// impossible to land an event on a guessed/shared/wrong-account calendar.
+let allCals = store.calendars(for: .event)
+let writable = allCals.filter { $0.allowsContentModifications }
+guard let raw = req.calendar, !raw.trimmingCharacters(in: .whitespaces).isEmpty else {
     fail("NO_CALENDAR_SPECIFIED: a calendar.add must name a writable calendar", 5)
 }
-guard let targetCal = writable.first(where: { norm($0.title) == norm(name) }) else {
-    let avail = writable.map { "\"\($0.title)\"" }.joined(separator: ", ")
-    fail("NO_WRITABLE_CALENDAR \"\(name)\"; available: \(avail)", 4)
+// Accept "Calendar Name|account-email" (the account-qualified form) or a bare
+// name. When an email is given it MUST equal the calendar's owning-account email.
+let parts = raw.split(separator: "|", maxSplits: 1).map { String($0).trimmingCharacters(in: .whitespaces) }
+let wantName = parts[0]
+let wantEmail: String? = parts.count > 1 ? parts[1] : nil
+let matches = writable.filter {
+    norm($0.title) == norm(wantName) && (wantEmail == nil || norm(accountEmail($0.source, allCals)) == norm(wantEmail!))
 }
+guard matches.count == 1 else {
+    if matches.isEmpty {
+        let avail = writable.map { "\"\($0.title) [\(accountEmail($0.source, allCals))]\"" }.joined(separator: ", ")
+        fail("NO_WRITABLE_CALENDAR matching \"\(raw)\"; available: \(avail)", 4)
+    }
+    fail("AMBIGUOUS_CALENDAR \"\(raw)\" matches \(matches.count); qualify as \"Name|account-email\"", 4)
+}
+let targetCal = matches[0]
 
 let event = EKEvent(eventStore: store)
 event.title = req.title
