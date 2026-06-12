@@ -52,6 +52,20 @@ func parseISO(_ s: String) -> Date? {
 guard CommandLine.arguments.count >= 2 else { fail("USAGE: calendar-write-helper <request.json>", 64) }
 let reqPath = CommandLine.arguments[1]
 
+// Request Calendar access FIRST — before any file work — so even a probe
+// invocation (with a throwaway path) triggers the per-binary TCC prompt, which
+// is how this binary earns the grant once. Also fails fast on a denied grant.
+let store = EKEventStore()
+let sema = DispatchSemaphore(value: 0)
+var granted = false
+if #available(macOS 14.0, *) {
+    store.requestFullAccessToEvents { ok, _ in granted = ok; sema.signal() }
+} else {
+    store.requestAccess(to: .event) { ok, _ in granted = ok; sema.signal() }
+}
+sema.wait()
+guard granted else { fail("CALENDAR_ACCESS_DENIED", 2) }
+
 let req: Req
 do {
     let data = try Data(contentsOf: URL(fileURLWithPath: reqPath))
@@ -63,17 +77,6 @@ do {
 guard let start = parseISO(req.startISO) else { fail("BAD_START: \(req.startISO)", 66) }
 guard let end = parseISO(req.endISO) else { fail("BAD_END: \(req.endISO)", 66) }
 guard end >= start else { fail("END_BEFORE_START", 66) }
-
-let store = EKEventStore()
-let sema = DispatchSemaphore(value: 0)
-var granted = false
-if #available(macOS 14.0, *) {
-    store.requestFullAccessToEvents { ok, _ in granted = ok; sema.signal() }
-} else {
-    store.requestAccess(to: .event) { ok, _ in granted = ok; sema.signal() }
-}
-sema.wait()
-guard granted else { fail("CALENDAR_ACCESS_DENIED", 2) }
 
 // Choose the target calendar. A named calendar must exist AND be writable; we
 // never silently retarget to the default when the requested one is missing.
