@@ -52,7 +52,11 @@ async function openDb(): Promise<DatabaseSync> {
   return db;
 }
 
-async function resolveChat(handle: string): Promise<{ rowid: number; guid: string } | null> {
+// Exported for the outbound-only send path (JAR-26). Stateless: it opens the
+// shared read-only db and looks up a chat by handle without touching any of the
+// poll-loop globals (chatGuid/chatId/recentSends), so resolving a non-Charlie
+// recipient never disturbs the Charlie receive loop.
+export async function resolveChat(handle: string): Promise<{ rowid: number; guid: string } | null> {
   const d = await openDb();
   const row = d
     .prepare("SELECT ROWID, guid FROM chat WHERE chat_identifier = ?")
@@ -146,7 +150,10 @@ function chunk(text: string, size = MAX_CHUNK): string[] {
   return out;
 }
 
-function sendViaApplescript(guid: string, text: string): Promise<void> {
+// Exported for the outbound-only send path (JAR-26). Stateless: takes an explicit
+// chat guid + text, so it sends to whichever chat the caller resolved without
+// reading or writing the Charlie-locked module globals.
+export function sendViaApplescript(guid: string, text: string): Promise<void> {
   return new Promise((resolve, reject) => {
     // JXA's app.chats.byId() and app.chats.whose() were both removed from
     // Messages.app's scripting API in recent macOS releases. AppleScript
