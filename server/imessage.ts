@@ -112,6 +112,23 @@ function pruneRecentSends(now: number): void {
   }
 }
 
+// Record a Chief-originated send so the poller skips its self-thread echo (the
+// is_from_me=0 receive row iMessage produces in CHIEF_CONTACT's chat). MUST be
+// called before the osascript send — the echo row can land within milliseconds.
+// Shared by sendImessage AND the outbound-only path (sendToContact) so neither
+// can re-enter the poll loop when it targets the watched chat. Exported for the
+// outbound path; isChiefEcho consumes these entries.
+export function noteChiefSend(text: string): void {
+  if (recentSends.length >= MAX_RECENT_SENDS) recentSends.shift();
+  recentSends.push({ text, sentAt: Date.now() });
+}
+
+// Exported for a focused echo-suppression test (it has a side effect: a match
+// consumes the entry). Do not use as a general predicate elsewhere.
+export function _isChiefEchoForTest(text: string, now: number): boolean {
+  return isChiefEcho(text, now);
+}
+
 function isChiefEcho(text: string, now: number): boolean {
   pruneRecentSends(now);
   for (let i = 0; i < recentSends.length; i++) {
@@ -209,10 +226,7 @@ export async function sendImessage(toNumber: string, text: string): Promise<bool
     // Record BEFORE invoking osascript: the receive-side row can land in
     // chat.db within milliseconds, and the poller can run between the send
     // and the recording.
-    if (recentSends.length >= MAX_RECENT_SENDS) {
-      recentSends.shift();
-    }
-    recentSends.push({ text: part, sentAt: Date.now() });
+    noteChiefSend(part);
     try {
       await sendViaApplescript(chatGuid, part);
       console.log(`[imessage] → sent ${part.length} chars to ${toNumber}`);

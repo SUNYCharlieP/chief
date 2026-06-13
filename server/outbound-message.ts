@@ -1,6 +1,6 @@
 import { CONTACT_BOOK, type ContactBook } from "./contacts.js";
 import { screenOutbound } from "./outbound-screen.js";
-import { resolveChat, sendViaApplescript } from "./imessage.js";
+import { resolveChat, sendViaApplescript, noteChiefSend } from "./imessage.js";
 import { stripEmDashes } from "./text-style.js";
 
 // Outbound-only iMessage send to an allowlisted recipient (JAR-26). Distinct
@@ -35,6 +35,14 @@ export async function sendToContact(
   if (!chat) return { ok: false, reason: "no-chat-for-recipient", recipient: display };
 
   // Same outbound cleanup as the Charlie path: strip em/en dashes deterministically.
-  await sendViaApplescript(chat.guid, stripEmDashes(text));
+  const body = stripEmDashes(text);
+  // Register the send for echo suppression BEFORE dispatching: if this recipient's
+  // chat happens to be the one the poller watches (e.g. a self-target), the
+  // is_from_me=0 receive echo must be skipped, not re-processed as an inbound
+  // message. For any other recipient the poller never watches that chat, so this
+  // is a harmless no-op. (NOTE: emoji/non-ASCII bodies can still slip through due
+  // to a separate, pre-existing chat.db read-garble bug in the matcher.)
+  noteChiefSend(body);
+  await sendViaApplescript(chat.guid, body);
   return { ok: true, recipient: display, dryRun: false };
 }
