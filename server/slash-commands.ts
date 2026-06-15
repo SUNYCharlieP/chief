@@ -3,6 +3,7 @@ import { api } from "../convex/_generated/api.js";
 import { runJobObserver } from "./job-observer.js";
 import { runMorningSurface } from "./morning-scan.js";
 import { handleUserMessage } from "./interaction-agent.js";
+import { runLearn } from "./learn.js";
 
 // The most recent genuine user turn (skipping slash commands like /retry, /jobs)
 // so /retry re-runs the real message, not a command. Returns its text + any
@@ -82,6 +83,10 @@ const COMMANDS: Record<string, Command> = {
         persistAssistantReply: false,
       });
     },
+  },
+  learn: {
+    description: "learn one concept from your recent work",
+    run: async (_args, conversationId) => runLearn(conversationId),
   },
   // --- Seam for future commands (args already parsed) -----------------------
   // youtube: {
