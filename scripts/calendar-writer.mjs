@@ -115,7 +115,7 @@ async function processRequest(file) {
   // here: that agent holds the authoritative CHIEF_CALENDAR_SOURCES config, so
   // the refresh keeps every source. Running the mirror from this agent (which has
   // no source env) would default to iCloud-only and CLOBBER the full snapshot,
-  // temporarily dropping the Google/Brianna calendars from Chief's read.
+  // temporarily dropping the Google/shared calendars from Chief's read.
   await new Promise((r) => setTimeout(r, 1500));
   try {
     await run("/bin/launchctl", ["kickstart", "-k", `gui/${process.getuid()}/com.chief.calendar-mirror`]);

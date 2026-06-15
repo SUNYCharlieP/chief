@@ -88,7 +88,7 @@ export function createCalendarTools(conversationId: string): RuntimeTool[] {
       async ({ title, startISO, endISO, calendar, location }) => {
         // Default to Charlie's OWN calendar (CHIEF_CALENDAR_DEFAULT) when the
         // model doesn't name one — NEVER the EventKit system default, which on
-        // this Mac is a SHARED calendar ("Brianna Work Schedule"); an event there
+        // this Mac is a SHARED calendar (someone else's work calendar); an event there
         // is visible to other people. The model may still target a named calendar.
         const targetCalendar = calendar ?? process.env.CHIEF_CALENDAR_DEFAULT;
         if (!targetCalendar) {
