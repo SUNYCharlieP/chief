@@ -9,6 +9,7 @@ import {
 } from "./habits/streak";
 import { MEMORY_TIERS } from "./memory/privacy";
 import { pendingActionKindValidator, stakesValidator } from "./pendingActionKinds";
+import { domainValidator } from "./conceptDomains";
 
 // Build a `v.union(v.literal(...))` validator straight from a canonical tuple
 // in streak.ts, preserving the literal member type. This is what keeps the DB
@@ -626,12 +627,7 @@ export default defineSchema({
   // rule, enforced structurally).
   concepts: defineTable({
     conceptId: v.string(),
-    domain: v.union(
-      v.literal("swift-arch"),
-      v.literal("saas-arch"),
-      v.literal("apple-dev"),
-      v.literal("arm"),
-    ),
+    domain: domainValidator,
     concept: v.string(), // one-line concept statement
     summary: v.string(), // 2-3 sentence essence; phase-2 drill/reveal reference
     // Soft reference to observations.observationId (the real commit/ticket this
@@ -640,8 +636,34 @@ export default defineSchema({
     learnedAt: v.number(),
     dueDate: v.number(), // learnedAt + ~2 days; always next-day+
     status: v.union(v.literal("learned"), v.literal("retired")),
+    // JAR-40 (phase 2): 0-based index into the fixed-step ladder [2,5,10] days.
+    // Absent = 0. Bumped by concepts.recordDrill after each graded drill.
+    step: v.optional(v.number()),
   })
     .index("by_due", ["dueDate"])
     .index("by_learned", ["learnedAt"])
+    .index("by_concept", ["conceptId"]),
+
+  // JAR-40 (Three-Link Drill phase 2): one row per spoken rep. STRUCTURAL grade
+  // only — there is deliberately NO correctness/score field, so grading cannot
+  // drift into a quiz (the structure-not-content discipline, enforced by the
+  // schema, not just the prompt). audioRef is reserved for phase 3 (local-only
+  // sandbox file id), populated then via the additive-optional pattern.
+  reps: defineTable({
+    repId: v.string(),
+    conceptId: v.string(), // -> concepts.conceptId
+    domain: domainValidator,
+    transcript: v.string(),
+    factPresent: v.boolean(),
+    mechanismPresent: v.boolean(),
+    consequencePresent: v.boolean(),
+    hedged: v.boolean(),
+    trailedOff: v.boolean(),
+    fancyPhraseSwap: v.boolean(),
+    sharpeningNote: v.string(),
+    audioRef: v.optional(v.string()), // phase 3: local-only audio file id
+    drilledAt: v.number(),
+  })
+    .index("by_drilled", ["drilledAt"])
     .index("by_concept", ["conceptId"]),
 });
