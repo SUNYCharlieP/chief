@@ -15,6 +15,7 @@ import { startJobObserver, stopJobObserver, runJobObserver } from "./job-observe
 import { isSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import { linkCardFor } from "./link-cards.js";
 import { actionCardFor, approvePendingAction, rejectPendingAction } from "./pending-actions.js";
+import { getDueDrill, gradeDrill, drillForceEnabled } from "./drill.js";
 import { authMiddleware, authStartupSummary, wsAuthAllowed } from "./auth.js";
 import { processImageUpload } from "./images/upload.js";
 import { linearStatusProbe } from "./integrations/linear.js";
@@ -468,6 +469,40 @@ async function main() {
     }
     try {
       res.json(await rejectPendingAction(String(conversationId), String(actionId)));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // --- Three-Link Drill (JAR-40) ------------------------------------------
+  // /drill/start surfaces one due concept; the model answer is NOT in the
+  // payload (it doesn't exist yet). `force` is read ONLY from the env here,
+  // never from the body, so a real build can't surface a concept off due date.
+  app.post("/drill/start", async (_req, res) => {
+    try {
+      const drill = await getDueDrill(drillForceEnabled());
+      res.json(drill ? { drill } : { none: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // /drill/grade grades the spoken transcript on structure, generates the model
+  // answer fresh (only now), bumps the spacing, saves the rep, and returns the
+  // grade + the now-revealed answer.
+  app.post("/drill/grade", async (req, res) => {
+    const { conceptId, domain, concept, transcript } = req.body ?? {};
+    if (!conceptId || !domain || !concept || typeof transcript !== "string") {
+      res.status(400).json({ error: "conceptId, domain, concept, transcript required" });
+      return;
+    }
+    try {
+      res.json(
+        await gradeDrill(
+          { conceptId: String(conceptId), domain: String(domain), concept: String(concept) },
+          transcript,
+        ),
+      );
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
