@@ -617,4 +617,31 @@ export default defineSchema({
   })
     .index("by_habit_and_date", ["habitId", "date"])
     .index("by_date", ["date"]),
+
+  // JAR-39 (Three-Link Drill phase 1): the concept store + dumb spacing engine.
+  // A concept is taught in learn mode, then drilled cold days later (phase 2).
+  // Spacing is intentionally NOT an SRS: a dueDate field, a "past due?" query,
+  // and a fixed-step bump (phase 2). dueDate is always next-day+, so the phase-2
+  // due-query can never surface a concept learned the same day (the no-same-day
+  // rule, enforced structurally).
+  concepts: defineTable({
+    conceptId: v.string(),
+    domain: v.union(
+      v.literal("swift-arch"),
+      v.literal("saas-arch"),
+      v.literal("apple-dev"),
+      v.literal("arm"),
+    ),
+    concept: v.string(), // one-line concept statement
+    summary: v.string(), // 2-3 sentence essence; phase-2 drill/reveal reference
+    // Soft reference to observations.observationId (the real commit/ticket this
+    // came from). Absent = domain-fallback (no grounding observation that day).
+    sourceObservationId: v.optional(v.string()),
+    learnedAt: v.number(),
+    dueDate: v.number(), // learnedAt + ~2 days; always next-day+
+    status: v.union(v.literal("learned"), v.literal("retired")),
+  })
+    .index("by_due", ["dueDate"])
+    .index("by_learned", ["learnedAt"])
+    .index("by_concept", ["conceptId"]),
 });
