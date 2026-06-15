@@ -16,6 +16,7 @@ import { isSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import { linkCardFor } from "./link-cards.js";
 import { actionCardFor, approvePendingAction, rejectPendingAction } from "./pending-actions.js";
 import { getDueDrill, gradeDrill, drillForceEnabled, getRepHistory } from "./drill.js";
+import { runLearnStructured } from "./learn.js";
 import { authMiddleware, authStartupSummary, wsAuthAllowed } from "./auth.js";
 import { processImageUpload } from "./images/upload.js";
 import { linearStatusProbe } from "./integrations/linear.js";
@@ -514,6 +515,22 @@ async function main() {
   app.get("/drill/history", async (_req, res) => {
     try {
       res.json(await getRepHistory());
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // /learn/run runs one learn cycle and returns STRUCTURED data (concept, domain,
+  // teaching, grounded, dueDate) the Drill surface renders as styled blocks
+  // (JAR-42), instead of the /learn chat-command prose. Same approved prompts.
+  app.post("/learn/run", async (_req, res) => {
+    try {
+      const r = await runLearnStructured();
+      if (!r) {
+        res.status(503).json({ error: "couldn't pick a concept to teach just now" });
+        return;
+      }
+      res.json(r);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

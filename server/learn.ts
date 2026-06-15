@@ -132,9 +132,19 @@ function humanDay(ms: number): string {
   return new Date(ms).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
-// Run one learn cycle: select -> save -> teach. Returns the teaching text plus a
-// one-line confirmation; the slash framework persists it as the assistant reply.
-export async function runLearn(conversationId: string): Promise<string> {
+// JAR-42: structured result the Drill surface renders as styled blocks. Same
+// content the chat fallback produces, just not flattened into prose.
+export interface LearnResult {
+  concept: string;
+  domain: Domain;
+  teaching: string;
+  grounded: boolean;
+  dueDate: number;
+}
+
+// Run one learn cycle: select -> save -> teach. Returns structured data (JAR-42).
+// null if selection failed. The selection + teaching prompts are unchanged.
+export async function runLearnStructured(): Promise<LearnResult | null> {
   const domain = pickDomain();
   const sinceMs = Date.now() - 14 * 86400000;
   const allObs = (await convex.query(api.observations.recent, { sinceMs, limit: 40 })) as any[];
@@ -147,7 +157,7 @@ export async function runLearn(conversationId: string): Promise<string> {
     { prompt: selectionPrompt(obs, learned), systemPrompt: selectionSystem(domain), tools: [], mode: "background" },
   );
   const selected = parseSelection((sel.text ?? "").trim(), domain);
-  if (!selected) return "I couldn't pick a concept to teach just now. Try /learn again.";
+  if (!selected) return null;
 
   // Ground the teaching in the cited observation. If the model cited an id that
   // is NOT in the real list, it hallucinated the source: downgrade to fallback
@@ -181,6 +191,14 @@ export async function runLearn(conversationId: string): Promise<string> {
   const teaching =
     (teach.text ?? "").trim() || "(couldn't generate the lesson, but the concept is saved. /learn to retry the teach.)";
 
-  const tag = selected.grounded ? "from your recent work" : "domain pick";
-  return `${teaching}\n\n// learned · ${selected.concept} · ${tag} · drill due ${humanDay(dueDate)}`;
+  return { concept: selected.concept, domain: selected.domain, teaching, grounded: selected.grounded, dueDate };
+}
+
+// Chat fallback for the /learn slash command: format the structured result as the
+// prose reply the slash framework persists. Output is unchanged from before JAR-42.
+export async function runLearn(_conversationId: string): Promise<string> {
+  const r = await runLearnStructured();
+  if (!r) return "I couldn't pick a concept to teach just now. Try /learn again.";
+  const tag = r.grounded ? "from your recent work" : "domain pick";
+  return `${r.teaching}\n\n// learned · ${r.concept} · ${tag} · drill due ${humanDay(r.dueDate)}`;
 }
