@@ -113,6 +113,7 @@ export interface DrillResult {
 export async function gradeDrill(
   c: { conceptId: string; domain: string; concept: string },
   transcript: string,
+  audioRef?: string,
 ): Promise<DrillResult> {
   const cfg = await getRuntimeConfig();
 
@@ -147,8 +148,38 @@ export async function gradeDrill(
     trailedOff: grade.trailedOff,
     fancyPhraseSwap: grade.fancyPhraseSwap,
     sharpeningNote: grade.sharpeningNote,
+    ...(audioRef ? { audioRef } : {}), // phase 3: link the local audio file, if capture was on
     drilledAt: Date.now(),
   });
 
   return { grade, modelAnswer, nextDue: bump.nextDue };
+}
+
+// JAR-41 (phase 3): 90-day retention for the rep archive.
+const RETENTION_MS = 90 * 86400000;
+
+export interface RepHistoryEntry {
+  repId: string;
+  conceptId: string;
+  concept: string;
+  domain: string;
+  factPresent: boolean;
+  mechanismPresent: boolean;
+  consequencePresent: boolean;
+  hedged: boolean;
+  trailedOff: boolean;
+  fancyPhraseSwap: boolean;
+  sharpeningNote: string;
+  audioRef: string | null;
+  drilledAt: number;
+}
+
+// Prune reps past the retention window (returning the audioRefs whose local
+// files the app must delete), then list the survivors newest-first for the
+// history view. Prune-then-list in one call so the client makes one round trip.
+export async function getRepHistory(): Promise<{ reps: RepHistoryEntry[]; prunedAudioRefs: string[] }> {
+  const cutoff = Date.now() - RETENTION_MS;
+  const pruned = await convex.mutation(api.reps.prune, { cutoff });
+  const reps = await convex.query(api.reps.recent, { limit: 100 });
+  return { reps, prunedAudioRefs: pruned.deletedAudioRefs };
 }

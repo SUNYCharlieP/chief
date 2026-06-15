@@ -15,7 +15,7 @@ import { startJobObserver, stopJobObserver, runJobObserver } from "./job-observe
 import { isSlashCommand, handleSlashCommand } from "./slash-commands.js";
 import { linkCardFor } from "./link-cards.js";
 import { actionCardFor, approvePendingAction, rejectPendingAction } from "./pending-actions.js";
-import { getDueDrill, gradeDrill, drillForceEnabled } from "./drill.js";
+import { getDueDrill, gradeDrill, drillForceEnabled, getRepHistory } from "./drill.js";
 import { authMiddleware, authStartupSummary, wsAuthAllowed } from "./auth.js";
 import { processImageUpload } from "./images/upload.js";
 import { linearStatusProbe } from "./integrations/linear.js";
@@ -491,7 +491,7 @@ async function main() {
   // answer fresh (only now), bumps the spacing, saves the rep, and returns the
   // grade + the now-revealed answer.
   app.post("/drill/grade", async (req, res) => {
-    const { conceptId, domain, concept, transcript } = req.body ?? {};
+    const { conceptId, domain, concept, transcript, audioRef } = req.body ?? {};
     if (!conceptId || !domain || !concept || typeof transcript !== "string") {
       res.status(400).json({ error: "conceptId, domain, concept, transcript required" });
       return;
@@ -501,8 +501,19 @@ async function main() {
         await gradeDrill(
           { conceptId: String(conceptId), domain: String(domain), concept: String(concept) },
           transcript,
+          typeof audioRef === "string" && audioRef ? audioRef : undefined,
         ),
       );
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // /drill/history prunes reps past the 90-day window (returning the audioRefs
+  // whose local files the app should delete) and lists the survivors newest-first.
+  app.get("/drill/history", async (_req, res) => {
+    try {
+      res.json(await getRepHistory());
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
